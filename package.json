@@ -10,7 +10,8 @@
     "typecheck": "bun turbo typecheck",
     "prepare": "husky",
     "random": "echo 'Random script'",
-    "hello": "echo 'Hello World!'"
+    "hello": "echo 'Hello World!'",
+    "test:no_external_deps": "bun test packages/opencode/test"
   },
   "workspaces": {
     "packages": [
