@@ -154,6 +154,16 @@ export namespace MessageV2 {
   })
   export type CompactionPart = z.infer<typeof CompactionPart>
 
+  export const ContextGaugePart = PartBase.extend({
+    type: z.literal("context-gauge"),
+    tokenCount: z.number(),
+    contextLimit: z.number(),
+    percentage: z.number(),
+  }).meta({
+    ref: "ContextGaugePart",
+  })
+  export type ContextGaugePart = z.infer<typeof ContextGaugePart>
+
   export const SubtaskPart = PartBase.extend({
     type: z.literal("subtask"),
     prompt: z.string(),
@@ -323,6 +333,7 @@ export namespace MessageV2 {
       AgentPart,
       RetryPart,
       CompactionPart,
+      ContextGaugePart,
     ])
     .meta({
       ref: "Part",
@@ -662,6 +673,12 @@ export namespace MessageV2 {
               type: "reasoning",
               text: part.text,
               providerMetadata: part.metadata,
+            })
+          }
+          if (part.type === "context-gauge") {
+            assistantMessage.parts.push({
+              type: "text",
+              text: `[CONTEXT GAUGE: ${part.tokenCount.toLocaleString()} / ${part.contextLimit.toLocaleString()} tokens (${part.percentage}%)]`,
             })
           }
         }
