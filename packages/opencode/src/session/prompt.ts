@@ -620,6 +620,14 @@ export namespace SessionPrompt {
           }),
         }),
       )
+      if (result === "continue") {
+        await SessionCompaction.injectContextGauge({
+          sessionID,
+          message: processor.message,
+          model: model.info,
+          messages: msgs,
+        })
+      }
       if (result === "stop") break
       continue
     }

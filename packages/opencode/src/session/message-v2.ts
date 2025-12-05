@@ -290,9 +290,18 @@ export namespace MessageV2 {
   })
   export type ToolPart = z.infer<typeof ToolPart>
 
+  export const Archive = z.object({
+    summary: z.string(),
+    indexTerms: z.array(z.string()),
+    rangeEnd: z.string(),
+  })
+  export type Archive = z.infer<typeof Archive>
+
   const Base = z.object({
     id: z.string(),
     sessionID: z.string(),
+    archive: Archive.optional(),
+    archivedBy: z.string().optional(),
   })
 
   export const User = Base.extend({
@@ -572,6 +581,29 @@ export namespace MessageV2 {
     const result: UIMessage[] = []
 
     for (const msg of input) {
+      if (msg.info.archive) {
+        const archive = msg.info.archive
+        const rangeLabel =
+          archive.rangeEnd && archive.rangeEnd !== msg.info.id
+            ? `[SMART_ARCHIVED: ${msg.info.id} to ${archive.rangeEnd}]`
+            : `[SMART_ARCHIVED: ${msg.info.id}]`
+        const placeholder = `${rangeLabel}\nSummary: ${archive.summary}\nIndex: ${archive.indexTerms.join(", ")}`
+
+        result.push({
+          id: msg.info.id,
+          role: msg.info.role,
+          parts: [
+            {
+              type: "text",
+              text: placeholder,
+            },
+          ],
+        })
+        continue
+      }
+
+      if (msg.info.archivedBy) continue
+
       if (msg.parts.length === 0) continue
 
       if (msg.info.role === "user") {
@@ -720,6 +752,26 @@ export namespace MessageV2 {
       }
     },
   )
+
+  export function partitionByArchive(messages: WithParts[]) {
+    const anchors: WithParts[] = []
+    const followers: WithParts[] = []
+    const normal: WithParts[] = []
+
+    for (const msg of messages) {
+      if (msg.info.archive) {
+        anchors.push(msg)
+        continue
+      }
+      if (msg.info.archivedBy) {
+        followers.push(msg)
+        continue
+      }
+      normal.push(msg)
+    }
+
+    return { anchors, followers, normal }
+  }
 
   export async function filterCompacted(stream: AsyncIterable<MessageV2.WithParts>) {
     const result = [] as MessageV2.WithParts[]

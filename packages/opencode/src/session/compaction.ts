@@ -85,6 +85,95 @@ export namespace SessionCompaction {
     }
   }
 
+  const DEFAULT_CONTEXT_LIMIT = 128_000
+  const CONTEXT_GAUGE_THRESHOLDS = [
+    { upper: 0.3, interval: 0.3 },
+    { upper: 0.6, interval: 0.15 },
+    { upper: 0.8, interval: 0.1 },
+    { upper: 1.0, interval: 0.05 },
+  ] as const
+
+  export function getIntervalForPercent(percent: number) {
+    for (const threshold of CONTEXT_GAUGE_THRESHOLDS) {
+      if (percent < threshold.upper) {
+        return threshold.interval
+      }
+    }
+    return CONTEXT_GAUGE_THRESHOLDS[CONTEXT_GAUGE_THRESHOLDS.length - 1].interval
+  }
+
+  export function getNextCheckpointPercent(lastCheckpointPercent: number) {
+    if (lastCheckpointPercent >= 1) return 1
+    const interval = getIntervalForPercent(lastCheckpointPercent)
+    return Math.min(1, lastCheckpointPercent + interval)
+  }
+
+  export function shouldTriggerContextGauge(currentPercent: number, lastCheckpointPercent: number) {
+    if (lastCheckpointPercent >= 1) return false
+    const nextCheckpoint = getNextCheckpointPercent(lastCheckpointPercent)
+    return currentPercent >= nextCheckpoint
+  }
+
+  export function getHighestGaugePercent(messages: MessageV2.WithParts[]) {
+    let highest = 0
+    for (const message of messages) {
+      for (const part of message.parts) {
+        if (part.type === "context-gauge") {
+          const decimal = Math.max(0, Math.min(1, part.percentage / 100))
+          highest = Math.max(highest, decimal)
+        }
+      }
+    }
+    return highest
+  }
+
+  export function createContextGaugePart(input: {
+    sessionID: string
+    messageID: string
+    tokenCount: number
+    contextLimit: number
+    percent: number
+  }) {
+    const contextLimit = input.contextLimit > 0 ? input.contextLimit : DEFAULT_CONTEXT_LIMIT
+    const tokenCount = Math.max(0, Math.min(input.tokenCount, contextLimit))
+    const percentage = Math.max(0, Math.min(100, Math.round(input.percent * 100)))
+    return {
+      id: Identifier.ascending("part"),
+      sessionID: input.sessionID,
+      messageID: input.messageID,
+      type: "context-gauge" as const,
+      tokenCount,
+      contextLimit,
+      percentage,
+    }
+  }
+
+  export async function injectContextGauge(input: {
+    sessionID: string
+    message: MessageV2.Assistant
+    model: ModelsDev.Model
+    messages: MessageV2.WithParts[]
+  }) {
+    const contextLimit = input.model.limit.context || DEFAULT_CONTEXT_LIMIT
+    if (contextLimit <= 0) return false
+
+    const tokens = input.message.tokens
+    const tokenCount = tokens.input
+
+    const currentPercent = Math.min(1, tokenCount / contextLimit)
+    const lastCheckpoint = getHighestGaugePercent(input.messages)
+    if (!shouldTriggerContextGauge(currentPercent, lastCheckpoint)) return false
+    const part = createContextGaugePart({
+      sessionID: input.sessionID,
+      messageID: input.message.id,
+      tokenCount: Math.min(tokenCount, contextLimit),
+      contextLimit,
+      percent: currentPercent,
+    })
+    await Session.updatePart(part)
+    return true
+  }
+
   export async function process(input: {
     parentID: string
     messages: MessageV2.WithParts[]
