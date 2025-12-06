@@ -36,7 +36,7 @@ This document provides the complete epic and story breakdown for Intelligent Con
 **Key Technical Constraints from Architecture:**
 - Use existing `msg_xxx` message ID format
 - Archive metadata stored on first message, `archivedBy` reference on subsequent
-- Separate LLM call for compaction (not TaskTool sub-agent)
+- Separate LLM call for compaction (not TaskTool subagent)
 - Context gauge as new part type with ramping frequency
 - `[SMART_ARCHIVED]` placeholder format
 - Standard Tool.define() pattern for Compact/Retrieve tools

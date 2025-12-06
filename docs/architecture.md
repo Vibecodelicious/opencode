@@ -125,7 +125,7 @@ Any of these would suggest SQLite is warranted for Growth phase.
 
 **ID Visibility:**
 - Normal conversation context: IDs NOT visible to LLM (standard AI SDK format)
-- Compaction sub-agent context: IDs prefixed to text content (`[msg_xxx] message text...`)
+- Compaction summarization call context: IDs prefixed to text content (`[msg_xxx] message text...`)
 
 ### Compaction Architecture
 
@@ -140,7 +140,7 @@ Any of these would suggest SQLite is warranted for Growth phase.
 6. System marks messages with `archive`/`archivedBy` metadata
 7. Main conversation continues with placeholder in place of archived messages
 
-**Rationale:** Follows existing compaction pattern - separate LLM call, not TaskTool sub-agent. Simpler implementation, proven pattern.
+**Rationale:** Follows existing compaction pattern - separate LLM call, not a TaskTool subagent. Simpler implementation, proven pattern.
 
 ### Archive Storage Design
 
@@ -232,15 +232,15 @@ Index: auth, JWT, security, token rotation
 
 **Rationale:** Content never moved from original storage - retrieval just reads and returns it.
 
-### Sub-Agent Context Format
+### Compaction Summarization Context Format
 
 **Decision:** Prefix message text with `[msg_xxx]` ID.
 
 ```typescript
-// User message as sub-agent sees it
+// User message as compaction summarization call sees it
 { type: "text", text: "[msg_abc] Fix the login page" }
 
-// Assistant message as sub-agent sees it
+// Assistant message as compaction summarization call sees it
 { type: "text", text: "[msg_def] Let me read the file first" }
 ```
 
@@ -334,7 +334,7 @@ packages/opencode/src/
 | `tool/compact.ts` | Compact tool: mark messages as archived, generate summary/index |
 | `tool/retrieve.ts` | Retrieve tool: fetch original content from archived messages |
 | `session/message-v2.ts` | Schema changes for archive metadata and context gauge parts |
-| `session/archive-context.ts` | Build ID-annotated context for compaction sub-agent |
+| `session/archive-context.ts` | Build ID-annotated context for compaction summarization call |
 | `session/compaction.ts` | Context gauge injection at token thresholds |
 | `config/config.ts` | User preference for compaction mode (ask/notify/silent) |
 
@@ -385,4 +385,3 @@ All architectural decisions work together as a unified system:
 - **Follows existing patterns**: Tool registration, message schemas, config extension
 - **Minimal new infrastructure**: Reuses existing storage, IDs, compaction patterns
 - **Proven approach**: Separate LLM call matches existing compaction implementation
-
