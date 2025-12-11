@@ -4,6 +4,7 @@ import { Identifier } from "../id/id"
 import { Instance } from "../project/instance"
 import { Provider } from "../provider/provider"
 import { MessageV2 } from "./message-v2"
+import { toModelMessageWithIDs } from "./archive-context"
 import { SystemPrompt } from "./system"
 import { Bus } from "../bus"
 import z from "zod"
@@ -247,7 +248,7 @@ export namespace SessionCompaction {
               content: x,
             }),
           ),
-          ...MessageV2.toModelMessage(
+          ...toModelMessageWithIDs(
             input.messages.filter((m) => {
               if (m.info.role !== "assistant" || m.info.error === undefined) {
                 return true
