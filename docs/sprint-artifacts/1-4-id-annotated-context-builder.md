@@ -1,6 +1,6 @@
 # Story 1.4: ID-Annotated Context Builder
 
-Status: Ready for Review
+Status: Done
 
 ## Story
 
@@ -75,6 +75,7 @@ Codex (GPT-5) via CLI harness
 - Implemented `toModelMessageWithIDs` to mirror `toModelMessage` while prefixing text parts with `[msg_<id>]`, keeping tool/attachment structures and archive placeholders intact.
 - Wired compaction flow to use the ID-annotated builder exclusively, leaving primary conversation rendering unchanged.
 - Added bun tests covering ID prefixing, archive handling, ignored text, non-text preservation, and tool call rendering; full suite fails only on existing permission/storage setup outside this change.
+- Hardened tool part rendering with defensive guards to skip malformed tool entries without crashing compaction context building.
 
 ### File List
 - docs/sprint-artifacts/1-4-id-annotated-context-builder.md
