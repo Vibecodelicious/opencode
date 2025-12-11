@@ -1,6 +1,6 @@
 # Story 1.4: ID-Annotated Context Builder
 
-Status: ready-for-dev
+Status: Ready for Review
 
 ## Story
 
@@ -18,17 +18,17 @@ so that the compaction LLM can reference specific messages by ID.
 
 ## Tasks / Subtasks
 
-- [ ] Task 1 (AC: 1, 2, 4, 5): Implement ID-prefixed context builder in `packages/opencode/src/session/archive-context.ts`
-  - [ ] Subtask 1.1: Mirror `toModelMessage()` structure, prefixing only text parts with `[msg_<id>]`
-  - [ ] Subtask 1.2: Preserve tool call parts, attachments, and non-text parts without mutation
-  - [ ] Subtask 1.3: Ensure archived messages render placeholders (anchor) or are omitted (followers)
-- [ ] Task 2 (AC: 4): Integration and wiring
-  - [ ] Subtask 2.1: Export and reference builder where compaction LLM call is made
-  - [ ] Subtask 2.2: Add defensive handling for unsupported part types to avoid crashes
-- [ ] Task 3 (AC: 3, 4): Testing
-  - [ ] Subtask 3.1: Unit tests for ID prefixing across user/assistant/system/tool messages
-  - [ ] Subtask 3.2: Tests for archived anchor placeholder rendering and follower omission
-  - [ ] Subtask 3.3: Tests ensuring non-archived messages and tool call parts remain unchanged
+- [x] Task 1 (AC: 1, 2, 4, 5): Implement ID-prefixed context builder in `packages/opencode/src/session/archive-context.ts`
+  - [x] Subtask 1.1: Mirror `toModelMessage()` structure, prefixing only text parts with `[msg_<id>]`
+  - [x] Subtask 1.2: Preserve tool call parts, attachments, and non-text parts without mutation
+  - [x] Subtask 1.3: Ensure archived messages render placeholders (anchor) or are omitted (followers)
+- [x] Task 2 (AC: 4): Integration and wiring
+  - [x] Subtask 2.1: Export and reference builder where compaction LLM call is made
+  - [x] Subtask 2.2: Add defensive handling for unsupported part types to avoid crashes
+- [x] Task 3 (AC: 3, 4): Testing
+  - [x] Subtask 3.1: Unit tests for ID prefixing across user/assistant/system/tool messages
+  - [x] Subtask 3.2: Tests for archived anchor placeholder rendering and follower omission
+  - [x] Subtask 3.3: Tests ensuring non-archived messages and tool call parts remain unchanged
 
 ## Dev Notes
 
@@ -72,5 +72,16 @@ Codex (GPT-5) via CLI harness
 ### Debug Log References
 
 ### Completion Notes List
+- Implemented `toModelMessageWithIDs` to mirror `toModelMessage` while prefixing text parts with `[msg_<id>]`, keeping tool/attachment structures and archive placeholders intact.
+- Wired compaction flow to use the ID-annotated builder exclusively, leaving primary conversation rendering unchanged.
+- Added bun tests covering ID prefixing, archive handling, ignored text, non-text preservation, and tool call rendering; full suite fails only on existing permission/storage setup outside this change.
 
 ### File List
+- docs/sprint-artifacts/1-4-id-annotated-context-builder.md
+- docs/sprint-artifacts/sprint-status.yaml
+- packages/opencode/src/session/archive-context.ts
+- packages/opencode/src/session/compaction.ts
+- packages/opencode/test/session/archive-context.test.ts
+
+### Change Log
+- Added ID-prefixed context builder for compaction and accompanying tests; updated compaction pipeline to consume new builder.

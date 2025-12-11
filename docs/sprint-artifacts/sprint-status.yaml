@@ -41,7 +41,7 @@ development_status:
   1-1-context-gauge-part-type: done
   1-2-context-gauge-injection-logic: review
   1-3-message-schema-extension-for-archive-fields: review
-  1-4-id-annotated-context-builder: ready-for-dev
+  1-4-id-annotated-context-builder: review
   1-5-configuration-extension-for-compaction-mode: backlog
   1-6-tool-registration-setup: backlog
   epic-1-retrospective: optional
