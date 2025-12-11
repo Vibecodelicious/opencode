@@ -99,8 +99,16 @@ export function toModelMessageWithIDs(messages: MessageV2.WithParts[]): ModelMes
         }
 
         if (part.type === "tool") {
+          // Defensive: skip malformed tool parts that lack state or status
+          if (!part.state || typeof part.state !== "object" || typeof part.state.status !== "string") {
+            continue
+          }
+
+          const toolType = (`tool-${part.tool ?? "unknown"}`) as `tool-${string}`
+          const toolCallId = part.callID ?? Identifier.ascending("tool-call")
+
           if (part.state.status === "completed") {
-            if (part.state.attachments?.length) {
+            if (Array.isArray(part.state.attachments) && part.state.attachments.length) {
               result.push({
                 id: Identifier.ascending("message"),
                 role: "user",
@@ -119,20 +127,20 @@ export function toModelMessageWithIDs(messages: MessageV2.WithParts[]): ModelMes
               })
             }
             assistantMessage.parts.push({
-              type: (`tool-${part.tool}`) as `tool-${string}`,
+              type: toolType,
               state: "output-available",
-              toolCallId: part.callID,
+              toolCallId,
               input: part.state.input,
-              output: part.state.time.compacted ? "[Old tool result content cleared]" : part.state.output,
+              output: part.state.time?.compacted ? "[Old tool result content cleared]" : part.state.output ?? "",
               callProviderMetadata: part.metadata,
             })
           } else if (part.state.status === "error") {
             assistantMessage.parts.push({
-              type: (`tool-${part.tool}`) as `tool-${string}`,
+              type: toolType,
               state: "output-error",
-              toolCallId: part.callID,
+              toolCallId,
               input: part.state.input,
-              errorText: part.state.error,
+              errorText: part.state.error ?? "Tool error",
               callProviderMetadata: part.metadata,
             })
           }

@@ -249,7 +249,6 @@ describe("toModelMessageWithIDs", () => {
     expect(serialized).toContain("[msg_assistant] [RETRY attempt=2]")
     expect(serialized).toContain("[msg_assistant] [STEP-FINISH reason=done] cost=5 tokens: input=10, output=20")
   })
-})
 
   test("renders tool errors without crashing or output-available entries", () => {
     const input: MessageV2.WithParts[] = [
@@ -286,3 +285,4 @@ describe("toModelMessageWithIDs", () => {
     expect(serialized).toContain("boom")
     expect(serialized).not.toContain("output-available")
   })
+})
