@@ -98,20 +98,20 @@ export function toModelMessageWithIDs(messages: MessageV2.WithParts[]): ModelMes
           })
         }
 
-          if (part.type === "tool") {
-            if (part.state.status === "completed") {
-              if (part.state.attachments?.length) {
-                result.push({
-                  id: Identifier.ascending("message"),
-                  role: "user",
-                  parts: [
-                    {
-                      type: "text",
-                      text: prefix(msg.info.id, `Tool ${part.tool} returned an attachment [continued]:`),
-                    },
-                    ...part.state.attachments.map((attachment) => ({
-                      type: "file" as const,
-                      url: attachment.url,
+        if (part.type === "tool") {
+          if (part.state.status === "completed") {
+            if (part.state.attachments?.length) {
+              result.push({
+                id: Identifier.ascending("message"),
+                role: "user",
+                parts: [
+                  {
+                    type: "text",
+                    text: prefix(msg.info.id, `Tool ${part.tool} returned an attachment [continued]:`),
+                  },
+                  ...part.state.attachments.map((attachment) => ({
+                    type: "file" as const,
+                    url: attachment.url,
                     mediaType: attachment.mime,
                     filename: attachment.filename,
                   })),
@@ -126,8 +126,7 @@ export function toModelMessageWithIDs(messages: MessageV2.WithParts[]): ModelMes
               output: part.state.time.compacted ? "[Old tool result content cleared]" : part.state.output,
               callProviderMetadata: part.metadata,
             })
-          }
-          if (part.state.status === "error") {
+          } else if (part.state.status === "error") {
             assistantMessage.parts.push({
               type: (`tool-${part.tool}`) as `tool-${string}`,
               state: "output-error",

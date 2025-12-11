@@ -250,3 +250,39 @@ describe("toModelMessageWithIDs", () => {
     expect(serialized).toContain("[msg_assistant] [STEP-FINISH reason=done] cost=5 tokens: input=10, output=20")
   })
 })
+
+  test("renders tool errors without crashing or output-available entries", () => {
+    const input: MessageV2.WithParts[] = [
+      {
+        info: {
+          ...baseAssistant,
+          id: "msg_error",
+        },
+        parts: [
+          {
+            ...basePart,
+            id: "tool_error",
+            messageID: "msg_error",
+            type: "tool",
+            tool: "fail",
+            callID: "call_err",
+            state: {
+              status: "error",
+              input: { val: 1 },
+              error: "boom",
+              time: { start: Date.now(), end: Date.now() },
+            },
+            metadata: { trace: "t1" },
+          },
+        ],
+      },
+    ]
+
+    const result = toModelMessageWithIDs(input)
+    const serialized = JSON.stringify(result)
+
+    expect(serialized).toContain("tool-result")
+    expect(serialized).toContain("error-text")
+    expect(serialized).toContain("boom")
+    expect(serialized).not.toContain("output-available")
+  })
