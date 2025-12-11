@@ -209,6 +209,10 @@ Observable indicators that validate the feature is working:
    - Prevent over-aggressive autonomous compaction
    - Cache economics optimization (only compact when benefit exceeds cache invalidation cost)
 
+### Technical Debt / Maintainability
+
+- **Renderer deduplication for model messages**: Refactor `toModelMessage` and `toModelMessageWithIDs` to share a single renderer with options (e.g., `includeIds`, `includeAllParts`) so the compaction context stays in sync with the primary renderer. Maintain parity with current `toModelMessage` behavior for the default path and the ID+full-parts contract for compaction. Add test coverage for both modes, including tool completed/error states and the extended part types, with guards preventing unscoped `part.state` access.
+
 ### Vision (Future)
 
 **Long-term aspirational capabilities:**
