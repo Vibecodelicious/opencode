@@ -27,20 +27,20 @@ workflow_status:
   document-project: docs/index.md
 
   # Discovery (Optional)
-  brainstorm-project: optional
+  brainstorm-project: skipped
   research: skipped
   product-brief: skipped
 
   # Planning
   prd: docs/prd.md
-  validate-prd: optional
-  create-ux-design: conditional
+  validate-prd: skipped
+  create-ux-design: skipped
 
   # Solutioning
   create-architecture: docs/architecture.md
   create-epics-and-stories: docs/epics.md
-  test-design: recommended
-  validate-architecture: optional
+  test-design: skipped
+  validate-architecture: skipped
   implementation-readiness: docs/implementation-readiness-report-2025-12-04.md
 
   # Implementation
