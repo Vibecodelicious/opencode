@@ -48,6 +48,7 @@ import { fn } from "@/util/fn"
 import { SessionProcessor } from "./processor"
 import { TaskTool } from "@/tool/task"
 import { SessionStatus } from "./status"
+import { Config } from "../config/config"
 
 // @ts-ignore
 globalThis.AI_SDK_LOG_WARNINGS = false
@@ -232,6 +233,62 @@ export namespace SessionPrompt {
     return
   }
 
+  function getUserText(message?: MessageV2.User) {
+    if (!message) return ""
+    return message.parts
+      .filter((part): part is MessageV2.TextPart => part.type === "text")
+      .map((part) => part.text)
+      .join(" ")
+      .trim()
+  }
+
+  function parseCompactionApproval(text: string): "approved" | "rejected" | "pending" {
+    const normalized = text.trim().toLowerCase()
+    if (!normalized) return "pending"
+    if (/^(y|yes|sure|ok|okay)\b/.test(normalized)) return "approved"
+    if (/^(n|no|stop|cancel)\b/.test(normalized)) return "rejected"
+    return "pending"
+  }
+
+  async function addAssistantNote(input: { sessionID: string; agent: string; model: MessageV2.User["model"]; text: string }) {
+    const message = await Session.updateMessage({
+      id: Identifier.ascending("message"),
+      role: "assistant",
+      sessionID: input.sessionID,
+      mode: input.agent,
+      path: {
+        cwd: Instance.directory,
+        root: Instance.worktree,
+      },
+      cost: 0,
+      tokens: {
+        input: 0,
+        output: 0,
+        reasoning: 0,
+        cache: { read: 0, write: 0 },
+      },
+      modelID: input.model.modelID,
+      providerID: input.model.providerID,
+      time: {
+        created: Date.now(),
+      },
+    })
+
+    await Session.updatePart({
+      id: Identifier.ascending("part"),
+      messageID: message.id,
+      sessionID: input.sessionID,
+      type: "text",
+      text: input.text,
+      synthetic: true,
+      time: {
+        start: Date.now(),
+        end: Date.now(),
+      },
+    })
+    return message
+  }
+
   export const loop = fn(Identifier.schema("session"), async (sessionID) => {
     const abort = start(sessionID)
     if (!abort) {
@@ -249,6 +306,9 @@ export namespace SessionPrompt {
       log.info("loop", { step, sessionID })
       if (abort.aborted) break
       let msgs = await MessageV2.filterCompacted(MessageV2.stream(sessionID))
+      const compactionConfig = (await Config.get()).compaction ?? { mode: "notify", enabled: true }
+      const compactionEnabled = compactionConfig.enabled !== false
+      const compactionMode = compactionConfig.mode ?? "notify"
 
       let lastUser: MessageV2.User | undefined
       let lastAssistant: MessageV2.Assistant | undefined
@@ -263,7 +323,10 @@ export namespace SessionPrompt {
         if (lastUser && lastFinished) break
         const task = msg.parts.filter((part) => part.type === "compaction" || part.type === "subtask")
         if (task && !lastFinished) {
-          tasks.push(...task)
+          for (const candidate of task) {
+            if (candidate.type === "compaction" && candidate.auto && !compactionEnabled) continue
+            tasks.push(candidate)
+          }
         }
       }
 
@@ -401,6 +464,57 @@ export namespace SessionPrompt {
 
       // pending compaction
       if (task?.type === "compaction") {
+        if (task.resolved) {
+          continue
+        }
+        const mode = task.mode ?? compactionMode
+        if (!compactionEnabled && task.auto) {
+          log.info("compaction skipped - disabled in config", { sessionID, auto: task.auto })
+          await Session.updatePart({ ...task, resolved: true })
+          continue
+        }
+
+        if (task.auto && mode === "ask") {
+          const now = Date.now()
+          if (!task.promptedAt) {
+            await addAssistantNote({
+              sessionID,
+              agent: lastUser.agent,
+              model: lastUser.model,
+              text: "Context is getting full. Compact now? Reply yes to compact or no to skip.",
+            })
+            await Session.updatePart({ ...task, promptedAt: now })
+            continue
+          }
+
+          const userResponded = lastUser?.time?.created && lastUser.time.created > (task.promptedAt ?? 0)
+          if (!userResponded) {
+            continue
+          }
+
+          const approval = parseCompactionApproval(getUserText(lastUser))
+          if (approval === "pending") {
+            await addAssistantNote({
+              sessionID,
+              agent: lastUser.agent,
+              model: lastUser.model,
+              text: "Please reply yes to compact now or no to skip this auto-compaction.",
+            })
+            await Session.updatePart({ ...task, promptedAt: now })
+            continue
+          }
+
+          await Session.updatePart({ ...task, decision: approval, resolved: approval === "rejected" })
+          if (approval === "rejected") {
+            await addAssistantNote({
+              sessionID,
+              agent: lastUser.agent,
+              model: lastUser.model,
+              text: "Compaction skipped per your response.",
+            })
+            continue
+          }
+        }
         const result = await SessionCompaction.process({
           messages: msgs,
           parentID: lastUser.id,
@@ -412,7 +526,19 @@ export namespace SessionPrompt {
           },
           sessionID,
           auto: task.auto,
+          mode,
         })
+        if (mode !== "silent") {
+          await addAssistantNote({
+            sessionID,
+            agent: lastUser.agent,
+            model: lastUser.model,
+            text: task.auto
+              ? `Automatic compaction completed (${mode} mode).`
+              : `Compaction completed (${mode} mode).`,
+          })
+        }
+        await Session.updatePart({ ...task, resolved: true })
         if (result === "stop") break
         continue
       }
@@ -421,6 +547,7 @@ export namespace SessionPrompt {
       if (
         lastFinished &&
         lastFinished.summary !== true &&
+        compactionEnabled &&
         SessionCompaction.isOverflow({ tokens: lastFinished.tokens, model: model.info })
       ) {
         await SessionCompaction.create({
@@ -428,6 +555,7 @@ export namespace SessionPrompt {
           agent: lastUser.agent,
           model: lastUser.model,
           auto: true,
+          mode: compactionMode,
         })
         continue
       }

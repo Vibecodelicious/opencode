@@ -149,6 +149,10 @@ export namespace MessageV2 {
   export const CompactionPart = PartBase.extend({
     type: z.literal("compaction"),
     auto: z.boolean(),
+    mode: z.enum(["ask", "notify", "silent"]).optional(),
+    promptedAt: z.number().optional(),
+    decision: z.enum(["approved", "rejected"]).optional(),
+    resolved: z.boolean().optional(),
   }).meta({
     ref: "CompactionPart",
   })

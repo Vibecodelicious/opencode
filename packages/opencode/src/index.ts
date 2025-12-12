@@ -55,6 +55,15 @@ const cli = yargs(hideBin(process.argv))
     type: "string",
     choices: ["DEBUG", "INFO", "WARN", "ERROR"],
   })
+  .option("compaction-mode", {
+    describe: "override compaction interaction mode for this run",
+    type: "string",
+    choices: ["ask", "notify", "silent"],
+  })
+  .option("disable-autocompact", {
+    describe: "disable automatic compaction for this run",
+    type: "boolean",
+  })
   .middleware(async (opts) => {
     await Log.init({
       print: process.argv.includes("--print-logs"),
@@ -68,6 +77,12 @@ const cli = yargs(hideBin(process.argv))
 
     process.env.AGENT = "1"
     process.env.OPENCODE = "1"
+    if (opts.compactionMode) {
+      process.env.OPENCODE_COMPACTION_MODE = opts.compactionMode as string
+    }
+    if (typeof opts.disableAutocompact === "boolean") {
+      process.env.OPENCODE_DISABLE_AUTOCOMPACT = opts.disableAutocompact ? "true" : "false"
+    }
 
     Log.Default.info("opencode", {
       version: Installation.VERSION,

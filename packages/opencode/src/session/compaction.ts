@@ -186,7 +186,9 @@ export namespace SessionCompaction {
     agent: string
     abort: AbortSignal
     auto: boolean
+    mode?: "ask" | "notify" | "silent"
   }) {
+    log.info("compaction start", { sessionID: input.sessionID, auto: input.auto, mode: input.mode })
     const model = await Provider.getModel(input.model.providerID, input.model.modelID)
     const system = [...SystemPrompt.compaction(model.providerID)]
     const msg = (await Session.updateMessage({
@@ -327,6 +329,7 @@ export namespace SessionCompaction {
         modelID: z.string(),
       }),
       auto: z.boolean(),
+      mode: z.enum(["ask", "notify", "silent"]).optional(),
     }),
     async (input) => {
       const msg = await Session.updateMessage({
@@ -345,6 +348,7 @@ export namespace SessionCompaction {
         sessionID: msg.sessionID,
         type: "compaction",
         auto: input.auto,
+        mode: input.mode,
       })
     },
   )

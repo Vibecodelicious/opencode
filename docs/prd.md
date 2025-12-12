@@ -505,3 +505,11 @@ Deferred to architecture phase.
 - NFR6: Retrieval returns exact original content (no corruption)
 - NFR7: Placeholders maintain valid references to archived content
 - NFR8: Storage operations are atomic (no partial writes)
+
+## Development Findings (Not Current Requirements — Future Consideration)
+
+The following items were observed during implementation. They are **not** part of this PRD's requirements and are recorded only to guide potential future improvement work:
+
+- Auto ask-mode consent can be inferred from any subsequent user message containing “yes/ok,” even if unrelated, which could trigger unexpected auto compaction (SessionPrompt approval parsing).
+- CLI flags only disable auto compaction (`--disable-autocompact`) and cannot re-enable it when config sets `compaction.enabled` false, limiting run-level overrides.
+- Tests cover config and environment overrides but do not exercise the CLI override path (`--compaction-mode`, `--disable-autocompact`), leaving that flow unverified.

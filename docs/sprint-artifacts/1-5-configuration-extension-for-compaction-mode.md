@@ -1,6 +1,6 @@
 # Story 1.5: Configuration Extension for Compaction Mode
 
-Status: ready-for-dev
+Status: Ready for Review
 
 ## Story
 
@@ -23,15 +23,15 @@ so that I can control how autonomous the LLM is with compaction decisions.
 
 ## Tasks / Subtasks
 
-- [ ] Task 1 (AC: 1, 2): Extend config schema and defaults in `packages/opencode/src/config/config.ts` with `compaction.mode` and `compaction.enabled`, defaulting to `"notify"` and `true`; ensure persisted/loaded settings remain stable.
-  - [ ] Subtask 1.1: Add Zod validation for `mode` union and boolean `enabled`, with clear error messages.
-  - [ ] Subtask 1.2: Ensure defaults apply when values are missing and do not break existing configs.
-- [ ] Task 2 (AC: 2, 3): Wire config loader/CLI override so mode and enabled can be set via config file or CLI flag pattern consistent with existing config handling.
-  - [ ] Subtask 2.1: Document/propagate the new options through config accessors.
-  - [ ] Subtask 2.2: Verify values are visible where compaction tooling will consume them.
-- [ ] Task 3 (AC: 4): Add tests covering valid/invalid config values and defaults.
-  - [ ] Subtask 3.1: Tests for valid modes and boolean enabled.
-  - [ ] Subtask 3.2: Tests for invalid mode values and non-boolean enabled with helpful errors.
+- [x] Task 1 (AC: 1, 2): Extend config schema and defaults in `packages/opencode/src/config/config.ts` with `compaction.mode` and `compaction.enabled`, defaulting to `"notify"` and `true`; ensure persisted/loaded settings remain stable.
+  - [x] Subtask 1.1: Add Zod validation for `mode` union and boolean `enabled`, with clear error messages.
+  - [x] Subtask 1.2: Ensure defaults apply when values are missing and do not break existing configs.
+- [x] Task 2 (AC: 2, 3): Wire config loader/CLI override so mode and enabled can be set via config file or CLI flag pattern consistent with existing config handling.
+  - [x] Subtask 2.1: Document/propagate the new options through config accessors.
+  - [x] Subtask 2.2: Verify values are visible where compaction tooling will consume them.
+- [x] Task 3 (AC: 4): Add tests covering valid/invalid config values and defaults.
+  - [x] Subtask 3.1: Tests for valid modes and boolean enabled.
+  - [x] Subtask 3.2: Tests for invalid mode values and non-boolean enabled with helpful errors.
 
 ## Dev Notes
 
@@ -71,5 +71,23 @@ so that I can control how autonomous the LLM is with compaction decisions.
 
 ### Completion Notes List
 
+- Added compaction schema defaults (`mode: "notify"`, `enabled: true`) with validation messaging for invalid options.
+- Applied compaction defaults during config loading when unset to keep existing configs stable.
+- Added config tests for compaction defaults, valid modes/enabled, and invalid inputs.
+- Ran `bun test` with XDG paths; enterprise storage/share tests fail due to missing `OPENCODE_STORAGE_ADAPTER` configuration (pre-existing setup issue).
+- Added CLI/env overrides: `OPENCODE_DISABLE_AUTOCOMPACT` forces compaction.enabled=false, `OPENCODE_COMPACTION_MODE` overrides mode; values surface via Config.get.
+- Verified `bun run test:no_external_deps` passes (skips external dependency suites).
+- Auto-compaction now respects config-enabled toggle, carries configured mode on compaction tasks, and CLI flags (`--compaction-mode`, `--disable-autocompact`) set the runtime overrides.
+
 ### File List
 
+- docs/sprint-artifacts/1-5-configuration-extension-for-compaction-mode.md
+- docs/sprint-artifacts/sprint-status.yaml
+- packages/opencode/src/config/config.ts
+- packages/opencode/test/config/config.test.ts
+- packages/opencode/src/flag/flag.ts
+- packages/opencode/src/index.ts
+- packages/opencode/src/session/prompt.ts
+- packages/opencode/src/session/compaction.ts
+- packages/opencode/src/session/message-v2.ts
+- packages/opencode/src/server/server.ts

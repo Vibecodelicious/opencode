@@ -404,6 +404,173 @@ test("resolves scoped npm plugins in config", async () => {
   })
 })
 
+test("applies compaction defaults when config omits compaction", async () => {
+  await using tmp = await tmpdir({
+    init: async (dir) => {
+      await Bun.write(
+        path.join(dir, "opencode.json"),
+        JSON.stringify({ $schema: "https://opencode.ai/config.json" }, null, 2),
+      )
+    },
+  })
+
+  await Instance.provide({
+    directory: tmp.path,
+    fn: async () => {
+      const config = await Config.get()
+      expect(config.compaction).toEqual({ mode: "notify", enabled: true })
+    },
+  })
+})
+
+test("accepts valid compaction values", async () => {
+  await using tmp = await tmpdir({
+    init: async (dir) => {
+      await Bun.write(
+        path.join(dir, "opencode.json"),
+        JSON.stringify(
+          {
+            $schema: "https://opencode.ai/config.json",
+            compaction: { mode: "ask", enabled: false },
+          },
+          null,
+          2,
+        ),
+      )
+    },
+  })
+
+  await Instance.provide({
+    directory: tmp.path,
+    fn: async () => {
+      const config = await Config.get()
+      expect(config.compaction).toEqual({ mode: "ask", enabled: false })
+    },
+  })
+})
+
+test("rejects invalid compaction mode with helpful error", async () => {
+  await using tmp = await tmpdir({
+    init: async (dir) => {
+      await Bun.write(
+        path.join(dir, "opencode.json"),
+        JSON.stringify(
+          {
+            $schema: "https://opencode.ai/config.json",
+            compaction: { mode: "loud", enabled: true },
+          },
+          null,
+          2,
+        ),
+      )
+    },
+  })
+
+  await Instance.provide({
+    directory: tmp.path,
+    fn: async () => {
+      try {
+        await Config.get()
+        throw new Error("expected validation failure")
+      } catch (error) {
+        const issues = (error as any)?.data?.issues ?? []
+        const messages = issues.map((issue: any) => issue.message)
+        expect(
+          messages.some((message) =>
+            message.includes("compaction.mode") || message.toLowerCase().includes("expected one of"),
+          ),
+        ).toBe(true)
+      }
+    },
+  })
+})
+
+test("rejects non-boolean compaction enabled with helpful error", async () => {
+  await using tmp = await tmpdir({
+    init: async (dir) => {
+      await Bun.write(
+        path.join(dir, "opencode.json"),
+        JSON.stringify(
+          {
+            $schema: "https://opencode.ai/config.json",
+            compaction: { mode: "notify", enabled: "false" },
+          },
+          null,
+          2,
+        ),
+      )
+    },
+  })
+
+  await Instance.provide({
+    directory: tmp.path,
+    fn: async () => {
+      try {
+        await Config.get()
+        throw new Error("expected validation failure")
+      } catch (error) {
+        const issues = (error as any)?.data?.issues ?? []
+        const messages = issues.map((issue: any) => issue.message)
+        expect(messages.some((message) => message.toLowerCase().includes("boolean"))).toBe(true)
+      }
+    },
+  })
+})
+
+test("compaction enabled respects OPENCODE_DISABLE_AUTOCOMPACT flag", async () => {
+  const original = process.env["OPENCODE_DISABLE_AUTOCOMPACT"]
+  process.env["OPENCODE_DISABLE_AUTOCOMPACT"] = "true"
+
+  try {
+    await using tmp = await tmpdir({
+      init: async (dir) => {
+        await Bun.write(
+          path.join(dir, "opencode.json"),
+          JSON.stringify({ $schema: "https://opencode.ai/config.json", compaction: { enabled: true } }, null, 2),
+        )
+      },
+    })
+
+    await Instance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        const config = await Config.get()
+        expect(config.compaction?.enabled).toBe(false)
+      },
+    })
+  } finally {
+    if (original === undefined) delete process.env["OPENCODE_DISABLE_AUTOCOMPACT"]
+    else process.env["OPENCODE_DISABLE_AUTOCOMPACT"] = original
+  }
+})
+
+test("compaction mode respects OPENCODE_COMPACTION_MODE flag", async () => {
+  const original = process.env["OPENCODE_COMPACTION_MODE"]
+  process.env["OPENCODE_COMPACTION_MODE"] = "silent"
+
+  try {
+    await using tmp = await tmpdir({
+      init: async (dir) => {
+        await Bun.write(
+          path.join(dir, "opencode.json"),
+          JSON.stringify({ $schema: "https://opencode.ai/config.json", compaction: { mode: "ask" } }, null, 2),
+        )
+      },
+    })
+
+    await Instance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        const config = await Config.get()
+        expect(config.compaction?.mode).toBe("silent")
+      },
+    })
+  } finally {
+    if (original === undefined) delete process.env["OPENCODE_COMPACTION_MODE"]
+    else process.env["OPENCODE_COMPACTION_MODE"] = original
+  }
+})
+
 test("merges plugin arrays from global and local configs", async () => {
   await using tmp = await tmpdir({
     init: async (dir) => {

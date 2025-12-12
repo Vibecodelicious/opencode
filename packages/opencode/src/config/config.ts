@@ -131,6 +131,17 @@ export namespace Config {
       result.share = "auto"
     }
 
+    const envCompactionMode = process.env["OPENCODE_COMPACTION_MODE"]
+    const envDisableAutoCompact = (() => {
+      const value = process.env["OPENCODE_DISABLE_AUTOCOMPACT"]?.toLowerCase()
+      return value === "true" || value === "1"
+    })()
+
+    const compactionOverrides: Partial<Info["compaction"]> = {}
+    if (envDisableAutoCompact) compactionOverrides.enabled = false
+    if (envCompactionMode) compactionOverrides.mode = envCompactionMode as any
+    result.compaction = Info.shape.compaction.parse({ ...(result.compaction ?? {}), ...compactionOverrides })
+
     if (!result.keybinds) result.keybinds = Info.shape.keybinds.parse({})
 
     return {
@@ -503,6 +514,27 @@ export namespace Config {
         .describe(
           "Automatically update to the latest version. Set to true to auto-update, false to disable, or 'notify' to show update notifications",
         ),
+      compaction: z
+        .object({
+          mode: z
+            .enum(["ask", "notify", "silent"], {
+              errorMap: (issue, ctx) => {
+                if (issue.code === "invalid_enum_value") {
+                  return { message: "compaction.mode must be one of ask, notify, silent" }
+                }
+                return { message: ctx.defaultError }
+              },
+            })
+            .default("notify")
+            .describe("Controls compaction interaction mode"),
+          enabled: z
+            .boolean({ invalid_type_error: "compaction.enabled must be a boolean" })
+            .default(true)
+            .describe("Toggle compaction features"),
+        })
+        .strict()
+        .default({ mode: "notify", enabled: true })
+        .describe("Compaction behavior configuration"),
       disabled_providers: z.array(z.string()).optional().describe("Disable providers that are loaded automatically"),
       enabled_providers: z
         .array(z.string())

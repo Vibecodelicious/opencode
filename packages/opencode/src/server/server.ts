@@ -838,6 +838,7 @@ export namespace Server {
           const id = c.req.valid("param").id
           const body = c.req.valid("json")
           const msgs = await Session.messages({ sessionID: id })
+          const compactionConfig = (await Config.get()).compaction
           let currentAgent = "build"
           for (let i = msgs.length - 1; i >= 0; i--) {
             const info = msgs[i].info
@@ -854,6 +855,7 @@ export namespace Server {
               modelID: body.modelID,
             },
             auto: false,
+            mode: compactionConfig?.mode,
           })
           await SessionPrompt.loop(id)
           return c.json(true)
