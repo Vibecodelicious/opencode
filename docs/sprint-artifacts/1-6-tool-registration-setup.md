@@ -1,6 +1,6 @@
 # Story 1.6: Tool Registration Setup
 
-Status: ready-for-dev
+Status: Ready for Review
 
 ## Story
 
@@ -17,15 +17,15 @@ so that the tool infrastructure is ready for implementation.
 
 ## Tasks / Subtasks
 
-- [ ] Task 1 (AC: 1, 2): Add stub tool implementations for Compact and Retrieve.
-  - [ ] Subtask 1.1: Create `packages/opencode/src/tool/compact.ts` stub with correct schema + stub output.
-  - [ ] Subtask 1.2: Create `packages/opencode/src/tool/retrieve.ts` stub with correct schema + stub output.
-- [ ] Task 2 (AC: 3): Add description files for both tools.
-  - [ ] Subtask 2.1: Create `packages/opencode/src/tool/compact.txt` with basic description/params.
-  - [ ] Subtask 2.2: Create `packages/opencode/src/tool/retrieve.txt` with basic description/params.
-- [ ] Task 3 (AC: 1, 4): Register both tools in `packages/opencode/src/tool/registry.ts` `all()` without impacting existing entries; ensure typing/permissions stay consistent.
-  - [ ] Subtask 3.1: Verify registry exports include Compact and Retrieve and remain deterministic.
-  - [ ] Subtask 3.2: Confirm existing tools and experimental gating (e.g., batch) still work.
+- [x] Task 1 (AC: 1, 2): Add stub tool implementations for Compact and Retrieve.
+  - [x] Subtask 1.1: Create `packages/opencode/src/tool/compact.ts` stub with correct schema + stub output.
+  - [x] Subtask 1.2: Create `packages/opencode/src/tool/retrieve.ts` stub with correct schema + stub output.
+- [x] Task 2 (AC: 3): Add description files for both tools.
+  - [x] Subtask 2.1: Create `packages/opencode/src/tool/compact.txt` with basic description/params.
+  - [x] Subtask 2.2: Create `packages/opencode/src/tool/retrieve.txt` with basic description/params.
+- [x] Task 3 (AC: 1, 4): Register both tools in `packages/opencode/src/tool/registry.ts` `all()` without impacting existing entries; ensure typing/permissions stay consistent.
+  - [x] Subtask 3.1: Verify registry exports include Compact and Retrieve and remain deterministic.
+  - [x] Subtask 3.2: Confirm existing tools and experimental gating (e.g., batch) still work.
 
 ## Story Requirements (from epics/prd)
 
@@ -92,3 +92,32 @@ so that the tool infrastructure is ready for implementation.
 
 - Target status: ready-for-dev once code/tests updated and registry entries verified.
 - Story file: docs/sprint-artifacts/1-6-tool-registration-setup.md
+
+## Dev Agent Record
+
+### Debug Log
+
+- Ran `bun test packages/opencode/test/tool/compact-retrieve.test.ts` (passes; uses isolated XDG paths)
+
+### Completion Notes
+
+- Added placeholder Compact/Retrieve tools with Zod-validated parameters and friendly "Not yet implemented" responses to prepare the compaction/retrieval workflow without behavior claims.
+- Registered both tools in the core registry so they surface alongside existing built-ins while preserving experimental batch gating and provider filters.
+- Added tool description files outlining placeholder status and intended future use.
+- Added focused tests ensuring registry IDs include the new tools and validation errors surface clearly for bad payloads.
+
+## File List
+
+- packages/opencode/src/tool/compact.ts
+- packages/opencode/src/tool/compact.txt
+- packages/opencode/src/tool/retrieve.ts
+- packages/opencode/src/tool/retrieve.txt
+- packages/opencode/src/tool/registry.ts
+- packages/opencode/test/tool/compact-retrieve.test.ts
+- docs/sprint-artifacts/sprint-status.yaml
+- docs/sprint-artifacts/1-6-tool-registration-setup.md
+- docs/epics.md
+
+## Change Log
+
+- Added placeholder registrations and stubs for compact/retrieve tools, descriptions, and registry entries; documented tests and clarified compaction range rules (2025-12-12).
