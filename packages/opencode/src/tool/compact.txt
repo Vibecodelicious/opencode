@@ -1,0 +1,1 @@
+Placeholder compaction tool. Accepts message ID ranges to identify what should eventually be archived or summarized, but performs no compaction yet and returns a "Not yet implemented" notice. Use to signal intended ranges; no changes are made to storage or messages.

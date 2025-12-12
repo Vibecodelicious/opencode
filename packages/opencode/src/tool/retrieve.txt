@@ -1,0 +1,1 @@
+Placeholder retrieval tool. Accepts an archiveId and returns a "Not yet implemented" response without reading or restoring data. Use when you need a stubbed retrieval path; future versions will load archived content by ID while respecting compaction settings.

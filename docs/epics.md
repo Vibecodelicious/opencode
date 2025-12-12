@@ -392,7 +392,10 @@ So that users and the LLM can specify what to compact.
 **And** the tool validates for each range:
 - Both message IDs exist in current session
 - Start message comes before end message chronologically
-- Messages are not already archived
+- Messages are not already archived (note: when building this story, ask for
+  clarification. There may be a range that includes previously-archived
+  messages; this is acceptable, but if the range starts or ends in
+  already-compacted messges, then the range is invalid)
 - Range contains at least one message
 - Ranges do not overlap with each other
 

@@ -43,7 +43,7 @@ development_status:
   1-3-message-schema-extension-for-archive-fields: review
   1-4-id-annotated-context-builder: review
   1-5-configuration-extension-for-compaction-mode: review
-  1-6-tool-registration-setup: backlog
+  1-6-tool-registration-setup: in-progress
   epic-1-retrospective: optional
 
   # Epic 2: Smart Compaction
