@@ -32,3 +32,9 @@ json
 ]
 }
 }
+
+## Running tests
+
+The local environment may have permissions errors when running tests; you can use tmux send-key and
+capture-pane to run tests. Use `bun test:no_external_deps` to avoid tests that
+have external dependencies.
