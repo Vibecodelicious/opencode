@@ -32,14 +32,22 @@ export namespace Config {
     return merged
   }
 
+  // Treat empty/whitespace env/flag values as undefined so they don't override real paths
+  function nonEmpty(value: string | undefined) {
+    if (!value) return undefined
+    const trimmed = value.trim()
+    return trimmed === "" ? undefined : trimmed
+  }
+
   export const state = Instance.state(async () => {
     const auth = await Auth.all()
     let result = await global()
 
     // Override with custom config if provided
-    if (Flag.OPENCODE_CONFIG) {
-      result = mergeConfigWithPlugins(result, await loadFile(Flag.OPENCODE_CONFIG))
-      log.debug("loaded custom config", { path: Flag.OPENCODE_CONFIG })
+    const configPath = nonEmpty(process.env["OPENCODE_CONFIG"]) ?? nonEmpty(Flag.OPENCODE_CONFIG)
+    if (configPath) {
+      result = mergeConfigWithPlugins(result, await loadFile(configPath))
+      log.debug("loaded custom config", { path: configPath })
     }
 
     for (const file of ["opencode.jsonc", "opencode.json"]) {
@@ -49,8 +57,9 @@ export namespace Config {
       }
     }
 
-    if (Flag.OPENCODE_CONFIG_CONTENT) {
-      result = mergeConfigWithPlugins(result, JSON.parse(Flag.OPENCODE_CONFIG_CONTENT))
+    const configContent = nonEmpty(process.env["OPENCODE_CONFIG_CONTENT"]) ?? nonEmpty(Flag.OPENCODE_CONFIG_CONTENT)
+    if (configContent) {
+      result = mergeConfigWithPlugins(result, JSON.parse(configContent))
       log.debug("loaded custom config from OPENCODE_CONFIG_CONTENT")
     }
 
@@ -77,16 +86,17 @@ export namespace Config {
       )),
     ]
 
-    if (Flag.OPENCODE_CONFIG_DIR) {
-      directories.push(Flag.OPENCODE_CONFIG_DIR)
-      log.debug("loading config from OPENCODE_CONFIG_DIR", { path: Flag.OPENCODE_CONFIG_DIR })
+    const configDir = nonEmpty(process.env["OPENCODE_CONFIG_DIR"]) ?? nonEmpty(Flag.OPENCODE_CONFIG_DIR)
+    if (configDir) {
+      directories.push(configDir)
+      log.debug("loading config from OPENCODE_CONFIG_DIR", { path: configDir })
     }
 
     const promises: Promise<void>[] = []
     for (const dir of directories) {
       await assertValid(dir)
 
-      if (dir.endsWith(".opencode") || dir === Flag.OPENCODE_CONFIG_DIR) {
+      if (dir.endsWith(".opencode") || dir === configDir) {
         for (const file of ["opencode.jsonc", "opencode.json"]) {
           log.debug(`loading config from ${path.join(dir, file)}`)
           result = mergeConfigWithPlugins(result, await loadFile(path.join(dir, file)))
@@ -115,8 +125,9 @@ export namespace Config {
       })
     }
 
-    if (Flag.OPENCODE_PERMISSION) {
-      result.permission = mergeDeep(result.permission ?? {}, JSON.parse(Flag.OPENCODE_PERMISSION))
+    const permissionContent = nonEmpty(process.env["OPENCODE_PERMISSION"]) ?? nonEmpty(Flag.OPENCODE_PERMISSION)
+    if (permissionContent) {
+      result.permission = mergeDeep(result.permission ?? {}, JSON.parse(permissionContent))
     }
 
     if (!result.username) result.username = os.userInfo().username
@@ -126,12 +137,7 @@ export namespace Config {
       result.share = "auto"
     }
 
-    // Handle migration from autoshare to share field
-    if (result.autoshare === true && !result.share) {
-      result.share = "auto"
-    }
-
-    const envCompactionMode = process.env["OPENCODE_COMPACTION_MODE"]
+    const envCompactionMode = nonEmpty(process.env["OPENCODE_COMPACTION_MODE"])
     const envDisableAutoCompact = (() => {
       const value = process.env["OPENCODE_DISABLE_AUTOCOMPACT"]?.toLowerCase()
       return value === "true" || value === "1"

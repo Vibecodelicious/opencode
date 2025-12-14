@@ -668,3 +668,49 @@ test("deduplicates duplicate plugins from global and local configs", async () =>
     },
   })
 })
+
+test("ignores empty env overrides and still loads file config", async () => {
+  const previous = {
+    OPENCODE_CONFIG: process.env.OPENCODE_CONFIG,
+    OPENCODE_CONFIG_CONTENT: process.env.OPENCODE_CONFIG_CONTENT,
+    OPENCODE_CONFIG_DIR: process.env.OPENCODE_CONFIG_DIR,
+    OPENCODE_PERMISSION: process.env.OPENCODE_PERMISSION,
+  }
+
+  try {
+    process.env.OPENCODE_CONFIG = "   "
+    process.env.OPENCODE_CONFIG_CONTENT = ""
+    process.env.OPENCODE_CONFIG_DIR = " "
+    process.env.OPENCODE_PERMISSION = ""
+
+    await using tmp = await tmpdir({
+      init: async (dir) => {
+        await Bun.write(
+          path.join(dir, "opencode.json"),
+          JSON.stringify({
+            $schema: "https://opencode.ai/config.json",
+            username: "file-user",
+            model: "file/model",
+          }),
+        )
+      },
+    })
+
+    await Instance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        const config = await Config.get()
+        expect(config.username).toBe("file-user")
+        expect(config.model).toBe("file/model")
+      },
+    })
+  } finally {
+    for (const [key, value] of Object.entries(previous)) {
+      if (value === undefined) {
+        delete process.env[key]
+      } else {
+        process.env[key] = value
+      }
+    }
+  }
+})

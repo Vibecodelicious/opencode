@@ -98,26 +98,27 @@ so that the tool infrastructure is ready for implementation.
 ### Debug Log
 
 - Ran `bun test packages/opencode/test/tool/compact-retrieve.test.ts` (passes; uses isolated XDG paths)
+- Added cleanup to restore env/plugin state after compact/retrieve tests
+- Adjusted config override handling to respect live environment variables without breaking flag-based callers
 
 ### Completion Notes
 
 - Added placeholder Compact/Retrieve tools with Zod-validated parameters and friendly "Not yet implemented" responses to prepare the compaction/retrieval workflow without behavior claims.
-- Registered both tools in the core registry so they surface alongside existing built-ins while preserving experimental batch gating and provider filters.
 - Added tool description files outlining placeholder status and intended future use.
-- Added focused tests ensuring registry IDs include the new tools and validation errors surface clearly for bad payloads.
+- Added focused tests ensuring registry IDs include the new tools, ordering stays deterministic (ahead of batch), and validation errors surface clearly for bad payloads, while keeping plugin/Instance isolation.
+- Ensured config env overrides read current environment variables directly and ignore empty overrides to keep runtime config accurate.
+- Hardened test isolation so env/plugins are restored between runs, now covering all config-related env vars.
 
 ## File List
 
-- packages/opencode/src/tool/compact.ts
+- packages/opencode/src/config/config.ts
 - packages/opencode/src/tool/compact.txt
-- packages/opencode/src/tool/retrieve.ts
 - packages/opencode/src/tool/retrieve.txt
-- packages/opencode/src/tool/registry.ts
+- packages/opencode/test/config/config.test.ts
 - packages/opencode/test/tool/compact-retrieve.test.ts
-- docs/sprint-artifacts/sprint-status.yaml
 - docs/sprint-artifacts/1-6-tool-registration-setup.md
-- docs/epics.md
 
 ## Change Log
 
-- Added placeholder registrations and stubs for compact/retrieve tools, descriptions, and registry entries; documented tests and clarified compaction range rules (2025-12-12).
+- Updated tool stub descriptions for compact/retrieve placeholders and validation messaging (2025-12-12).
+- Updated config loading to honor live env overrides (ignoring empty overrides), added regression coverage in config tests, and expanded compact/retrieve test sandbox cleanup to prevent env/plugin leakage (2025-12-12).
