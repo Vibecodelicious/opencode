@@ -35,6 +35,11 @@ json
 
 ## Running tests
 
-The local environment may have permissions errors when running tests; you can use tmux send-key and
-capture-pane to run tests. Use `bun test:no_external_deps` to avoid tests that
-have external dependencies.
+This is a monorepo. The `bun test:no_external_deps` script is in the ROOT
+package.json, not in packages/opencode/package.json. Always run test commands
+from the repository root.
+
+The local environment may have permissions errors when running tests; you can
+use tmux send-keys and capture-pane to run tests. Use `bun test:no_external_deps`
+to avoid tests that have external dependencies. You should not even try to run
+the full test suite for this project.
