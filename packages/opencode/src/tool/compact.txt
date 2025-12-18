@@ -1,1 +1,12 @@
-Placeholder compaction tool. Accepts message ID ranges to signal what should eventually be archived or summarized, but performs no compaction and returns a "Not yet implemented" notice. Usage: call with `ranges: [{ startMessageId: "msg_abc", endMessageId?: "msg_xyz" }]`; ranges are inclusive and may be a single message when `endMessageId` is omitted. No storage or message changes occur in this stub.
+Validates message ranges for compaction readiness. Checks that specified messages exist, are in chronological order, and are not already archived at range boundaries. Returns a summary of validated ranges and message counts when validation passes.
+
+Usage: call with `ranges: [{ startMessageId: "msg_abc", endMessageId?: "msg_xyz" }]`; ranges are inclusive and may be a single message when `endMessageId` is omitted.
+
+Validation rules:
+- All message IDs must exist in the session
+- startMessageId must come before endMessageId chronologically (message IDs are lexicographically sortable)
+- Start and end messages must not be already archived (have `archive` or `archivedBy` fields)
+- Multiple ranges must not overlap with each other
+- Archived messages in the middle of a range are allowed
+
+Note: This tool validates ranges but does not yet perform actual compaction or LLM summarization (Story 2.2).

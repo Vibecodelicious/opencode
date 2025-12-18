@@ -3,7 +3,7 @@ import fs from "fs/promises"
 import path from "path"
 
 const ctx = {
-  sessionID: "test",
+  sessionID: "ses_test",
   messageID: "",
   toolCallID: "",
   agent: "build",
@@ -110,15 +110,14 @@ describe("tool.compact and tool.retrieve stubs", () => {
     })
   })
 
-  test("compact returns stubbed placeholder response", async () => {
+  test("compact rejects non-existent messages with clear error", async () => {
     await withSandbox(async ({ Instance, CompactTool }) => {
       await Instance.provide({
         directory: projectRoot,
         fn: async () => {
           const tool = await CompactTool.init()
-          const result = await tool.execute({ ranges: [{ startMessageId: "abc", endMessageId: "def" }] }, ctx)
-          expect(result.output.toLowerCase()).toContain("not yet implemented")
-          expect(result.metadata).toEqual({})
+          const promise = tool.execute({ ranges: [{ startMessageId: "msg_nonexistent", endMessageId: "msg_alsonotreal" }] }, ctx)
+          await expect(promise).rejects.toThrow(/message not found/i)
         },
       })
     })
@@ -241,6 +240,79 @@ describe("tool.compact and tool.retrieve stubs", () => {
             await tool.execute({ archiveId: "" }, ctx)
           })()
           await expect(promise).rejects.toThrow(/archiveId/i)
+        },
+      })
+    })
+  })
+
+  test("compact rejects overlapping ranges", async () => {
+    await withSandbox(async ({ Instance, CompactTool }) => {
+      await Instance.provide({
+        directory: projectRoot,
+        fn: async () => {
+          const tool = await CompactTool.init()
+          // These ranges overlap: msg_001-msg_003 and msg_002-msg_004
+          const promise = tool.execute({
+            ranges: [
+              { startMessageId: "msg_001", endMessageId: "msg_003" },
+              { startMessageId: "msg_002", endMessageId: "msg_004" },
+            ],
+          }, ctx)
+          await expect(promise).rejects.toThrow(/ranges overlap/i)
+        },
+      })
+    })
+  })
+
+  test("compact allows non-overlapping ranges", async () => {
+    await withSandbox(async ({ Instance, CompactTool }) => {
+      await Instance.provide({
+        directory: projectRoot,
+        fn: async () => {
+          const tool = await CompactTool.init()
+          // Non-overlapping ranges should pass overlap validation but fail on message lookup
+          const promise = tool.execute({
+            ranges: [
+              { startMessageId: "msg_001", endMessageId: "msg_002" },
+              { startMessageId: "msg_005", endMessageId: "msg_006" },
+            ],
+          }, ctx)
+          // Should fail at message lookup, not overlap check
+          await expect(promise).rejects.toThrow(/message not found/i)
+        },
+      })
+    })
+  })
+
+  test("compact normalizes single message ranges", async () => {
+    await withSandbox(async ({ Instance, CompactTool }) => {
+      await Instance.provide({
+        directory: projectRoot,
+        fn: async () => {
+          const tool = await CompactTool.init()
+          // When endMessageId is omitted, it should default to startMessageId
+          // This should fail at message lookup, proving the range was normalized
+          const promise = tool.execute({
+            ranges: [{ startMessageId: "msg_single" }],
+          }, ctx)
+          await expect(promise).rejects.toThrow(/message not found.*msg_single/i)
+        },
+      })
+    })
+  })
+
+  test("compact validates message lookup before order check", async () => {
+    await withSandbox(async ({ Instance, CompactTool }) => {
+      await Instance.provide({
+        directory: projectRoot,
+        fn: async () => {
+          const tool = await CompactTool.init()
+          // Non-existent messages fail at lookup before order validation
+          // Order validation with real messages is tested in compact-validation.test.ts
+          const promise = tool.execute({
+            ranges: [{ startMessageId: "msg_zzz", endMessageId: "msg_aaa" }],
+          }, ctx)
+          await expect(promise).rejects.toThrow(/message not found/i)
         },
       })
     })
