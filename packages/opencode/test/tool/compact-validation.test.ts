@@ -161,9 +161,9 @@ describe("compact tool validation with real sessions", () => {
             ranges: [{ startMessageId: msg1Id, endMessageId: msg3Id }],
           }, ctx)
 
-          expect(result.output).toContain("Validated 1 range")
+          expect(result.output).toContain("Generated summaries for 1 range")
           expect(result.output).toContain("3 messages")
-          expect(result.output).toContain("Ready for summarization")
+          expect(result.output).toContain("ready for archival")
           expect(result.metadata.rangeCount).toBe(1)
           expect(result.metadata.totalMessages).toBe(3)
 
@@ -239,7 +239,7 @@ describe("compact tool validation with real sessions", () => {
             ],
           }, ctx)
 
-          expect(result.output).toContain("Validated 2 range")
+          expect(result.output).toContain("Generated summaries for 2 range")
           expect(result.output).toContain("4 messages")
           expect(result.metadata.rangeCount).toBe(2)
           expect(result.metadata.totalMessages).toBe(4)
@@ -565,7 +565,7 @@ describe("compact tool validation with real sessions", () => {
           }, ctx)
 
           // Should succeed because only start/end archive status matters
-          expect(result.output).toContain("Validated 1 range")
+          expect(result.output).toContain("Generated summaries for 1 range")
           expect(result.output).toContain("3 messages")
           expect(result.metadata.totalMessages).toBe(3)
 
@@ -625,4 +625,139 @@ describe("compact tool validation with real sessions", () => {
     })
   })
 
+})
+
+describe("compact tool summarization error handling", () => {
+  test("gracefully handles model lookup failure with error in output", async () => {
+    await withSandbox(async ({ Instance, Session, CompactTool }) => {
+      await Instance.provide({
+        directory: projectRoot,
+        fn: async () => {
+          const session = await Session.create({})
+
+          const msg1Id = Identifier.ascending("message")
+          const msg2Id = Identifier.ascending("message")
+
+          // Create user message
+          await Session.updateMessage({
+            id: msg1Id,
+            sessionID: session.id,
+            role: "user",
+            time: { created: Date.now() },
+            agent: "build",
+            model: { providerID: "test", modelID: "test" },
+          })
+
+          await Session.updatePart({
+            id: Identifier.ascending("part"),
+            sessionID: session.id,
+            messageID: msg1Id,
+            type: "text",
+            text: "Test message for error handling",
+          })
+
+          // Create assistant message with test-provider (will fail Provider.getModel lookup)
+          await Session.updateMessage({
+            id: msg2Id,
+            sessionID: session.id,
+            role: "assistant",
+            time: { created: Date.now() },
+            parentID: msg1Id,
+            modelID: "test-model",
+            providerID: "test-provider",
+            mode: "build",
+            path: { cwd: projectRoot, root: projectRoot },
+            cost: 0,
+            tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+          })
+
+          await Session.updatePart({
+            id: Identifier.ascending("part"),
+            sessionID: session.id,
+            messageID: msg2Id,
+            type: "text",
+            text: "Assistant response",
+          })
+
+          const tool = await CompactTool.init()
+          const ctx = {
+            sessionID: session.id,
+            messageID: "",
+            toolCallID: "",
+            agent: "build",
+            abort: AbortSignal.any([]),
+            metadata: () => {},
+          }
+
+          const result = await tool.execute({
+            ranges: [{ startMessageId: msg1Id, endMessageId: msg2Id }],
+          }, ctx)
+
+          // Tool should succeed with graceful degradation
+          expect(result.output).toContain("Generated summaries for 1 range")
+          expect(result.output).toContain("0/1 successful") // No summaries generated due to model lookup failure
+          expect(result.output).toContain("No summary generated") // Fallback text
+          expect(result.output).toContain("Note:") // Error note present
+
+          // Metadata should contain error info
+          expect(result.metadata.error).toBeDefined()
+          expect(result.metadata.summaries).toEqual({}) // Empty due to failure
+
+          await Session.remove(session.id)
+        },
+      })
+    })
+  })
+
+  test("reports no model info when session has no assistant messages", async () => {
+    await withSandbox(async ({ Instance, Session, CompactTool }) => {
+      await Instance.provide({
+        directory: projectRoot,
+        fn: async () => {
+          const session = await Session.create({})
+
+          const msgId = Identifier.ascending("message")
+
+          // Create only user message (no assistant = no model info)
+          await Session.updateMessage({
+            id: msgId,
+            sessionID: session.id,
+            role: "user",
+            time: { created: Date.now() },
+            agent: "build",
+            model: { providerID: "test", modelID: "test" },
+          })
+
+          await Session.updatePart({
+            id: Identifier.ascending("part"),
+            sessionID: session.id,
+            messageID: msgId,
+            type: "text",
+            text: "User only message",
+          })
+
+          const tool = await CompactTool.init()
+          const ctx = {
+            sessionID: session.id,
+            messageID: "",
+            toolCallID: "",
+            agent: "build",
+            abort: AbortSignal.any([]),
+            metadata: () => {},
+          }
+
+          const result = await tool.execute({
+            ranges: [{ startMessageId: msgId }],
+          }, ctx)
+
+          // Should succeed but note missing model info
+          expect(result.output).toContain("Generated summaries for 1 range")
+          expect(result.output).toContain("No model information available")
+          expect(result.metadata.error).toContain("No model information available")
+
+          await Session.remove(session.id)
+        },
+      })
+    })
+  })
 })
