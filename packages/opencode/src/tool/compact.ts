@@ -10,6 +10,7 @@ import { ProviderTransform } from "../provider/transform"
 import { Log } from "../util/log"
 import { Token } from "../util/token"
 import { mergeDeep, pipe } from "remeda"
+import { Storage } from "../storage/storage"
 
 const log = Log.create({ service: "tool.compact" })
 
@@ -25,8 +26,14 @@ const Parameters = z.object({
     .describe("Message ranges to consider for compaction preparation"),
 })
 
-interface NormalizedRange {
+/**
+ * A normalized message range with both start and end message IDs.
+ * Used internally to represent validated compaction ranges.
+ */
+export interface NormalizedRange {
+  /** ID of the first message in the range */
   startMessageId: string
+  /** ID of the last message in the range (inclusive) */
   endMessageId: string
 }
 
@@ -223,10 +230,20 @@ function parseCompactionResponse(text: string): Record<string, CompactionSummary
     if (typeof v.summary !== "string") continue
     if (!Array.isArray(v.indexTerms)) continue
 
-    result[key] = {
-      summary: v.summary,
-      indexTerms: v.indexTerms.filter((t): t is string => typeof t === "string").slice(0, 7),
+    // Validate non-empty content - reject empty summaries
+    const summary = v.summary.trim()
+    if (summary.length === 0) {
+      log.warn("skipping entry with empty summary", { key })
+      continue
     }
+
+    const indexTerms = v.indexTerms.filter((t): t is string => typeof t === "string" && t.trim().length > 0).slice(0, 7)
+    if (indexTerms.length === 0) {
+      log.warn("skipping entry with no valid index terms", { key })
+      continue
+    }
+
+    result[key] = { summary, indexTerms }
   }
 
   return result
@@ -294,7 +311,6 @@ Respond in JSON format:
   try {
     const response = await streamText({
       abortSignal: input.abort,
-      maxRetries: 0,
       providerOptions: ProviderTransform.providerOptions(
         model.npm,
         model.providerID,
@@ -338,6 +354,212 @@ Respond in JSON format:
     // Return empty summaries on failure - tool should still report validation success
     return {}
   }
+}
+
+// ============================================================================
+// Archive Metadata Storage (Story 2.3)
+// ============================================================================
+
+/**
+ * Input for storing archive metadata to messages.
+ */
+export interface ArchiveMetadataInput {
+  /** The session ID containing the messages to archive */
+  sessionID: string
+  /** Validated ranges with their messages, ready for archival */
+  validatedRanges: Array<{
+    range: NormalizedRange
+    messages: MessageV2.WithParts[]
+  }>
+  /** Summaries keyed by startMessageId for each range */
+  summaries: Record<string, CompactionSummary>
+}
+
+/**
+ * Result of storing archive metadata.
+ */
+export interface ArchiveMetadataResult {
+  /** Number of messages successfully archived */
+  archivedCount: number
+  /** Number of messages skipped (already archived by concurrent operations) */
+  skippedCount: number
+  /** Error messages for ranges that failed to archive */
+  errors: string[]
+}
+
+/**
+ * Stores archive metadata to messages for the given ranges.
+ *
+ * ## Behavior
+ * - First unarchived message in each range becomes the anchor with `archive` field
+ * - Subsequent unarchived messages get `archivedBy` field pointing to anchor
+ * - If original first message is already archived, next unarchived message is promoted to anchor
+ * - Original message content is preserved (only metadata fields are added)
+ *
+ * ## Atomicity
+ * Uses Storage.update() which provides file locking for atomic updates per message.
+ * Anchor selection happens inside the lock to handle race conditions correctly.
+ * Each range is processed independently - partial success is acceptable.
+ *
+ * ## Idempotency
+ * This function is idempotent in terms of final state - calling it multiple times with the
+ * same input produces the same archived messages. However, the return value differs:
+ * - First call: `archivedCount = N` (messages archived)
+ * - Subsequent calls: `archivedCount = 0, skippedCount = N` (messages already archived)
+ *
+ * @param input - The session ID, validated ranges, and summaries to archive
+ * @returns Result containing counts of archived/skipped messages and any errors
+ */
+export async function storeArchiveMetadata(input: ArchiveMetadataInput): Promise<ArchiveMetadataResult> {
+  const errors: string[] = []
+  let archivedCount = 0
+  let skippedCount = 0
+
+  for (const { range, messages } of input.validatedRanges) {
+    const summary = input.summaries[range.startMessageId]
+    if (!summary) {
+      errors.push(`No summary found for range starting at ${range.startMessageId}`)
+      continue
+    }
+
+    // Defensive check: skip ranges with no messages (shouldn't happen but prevents errors)
+    if (messages.length === 0) {
+      log.warn("range has no messages, skipping", {
+        sessionID: input.sessionID,
+        startMessageId: range.startMessageId,
+        endMessageId: range.endMessageId,
+      })
+      continue
+    }
+
+    // Declare outside try so catch can access them for rangeEnd correction
+    let anchorId: string | null = null
+    let actualRangeEnd: string | null = null
+    let rangeArchivedCount = 0
+    let rangeSkippedCount = 0
+
+    try {
+      // Single pass: dynamically select anchor and archive messages
+      // Anchor selection happens inside Storage.update lock to handle races
+      for (const msg of messages) {
+        // Pre-check: skip messages already archived in our input data.
+        // This avoids unnecessary I/O while still handling concurrent races inside the lock.
+        if (msg.info.archive || msg.info.archivedBy) {
+          log.debug("message already archived in input data, skipping", {
+            messageID: msg.info.id,
+            existingArchive: !!msg.info.archive,
+            existingArchivedBy: msg.info.archivedBy,
+          })
+          rangeSkippedCount++
+          continue
+        }
+
+        await Storage.update<MessageV2.Info>(["message", input.sessionID, msg.info.id], (draft) => {
+          // Race condition protection: skip if archived by concurrent operation
+          if (draft.archive || draft.archivedBy) {
+            log.debug("message already archived by concurrent operation, skipping", {
+              messageID: msg.info.id,
+              existingArchive: !!draft.archive,
+              existingArchivedBy: draft.archivedBy,
+            })
+            rangeSkippedCount++
+            return
+          }
+
+          if (anchorId === null) {
+            // First unarchived message becomes the anchor
+            anchorId = msg.info.id
+            draft.archive = {
+              summary: summary.summary,
+              indexTerms: summary.indexTerms,
+              rangeEnd: range.endMessageId, // May update later if end messages were skipped
+            }
+          } else {
+            // Subsequent unarchived messages point to the anchor
+            draft.archivedBy = anchorId
+          }
+          actualRangeEnd = msg.info.id
+          rangeArchivedCount++
+        })
+      }
+
+      // Correct anchor's rangeEnd if the actual last archived message differs from intended.
+      // This handles: (a) some end messages skipped due to pre-archival, (b) only anchor archived.
+      // Safety: verify archive ownership via summary match to avoid overwriting concurrent operations.
+      if (anchorId && actualRangeEnd && actualRangeEnd !== range.endMessageId) {
+        const correctedRangeEnd = actualRangeEnd // Capture for closure (TypeScript narrowing)
+        const expectedSummary = summary.summary // Verify ownership before correcting
+        await Storage.update<MessageV2.Info>(["message", input.sessionID, anchorId], (draft) => {
+          // Only correct rangeEnd if this archive was created by us (same summary)
+          // This prevents overwriting a concurrent operation's rangeEnd
+          if (draft.archive && draft.archive.summary === expectedSummary) {
+            draft.archive.rangeEnd = correctedRangeEnd
+          }
+        })
+      }
+
+      archivedCount += rangeArchivedCount
+      skippedCount += rangeSkippedCount
+
+      if (anchorId) {
+        log.info("archived range", {
+          sessionID: input.sessionID,
+          anchorMessageId: anchorId,
+          actualRangeEnd,
+          messageCount: rangeArchivedCount,
+          skippedCount: rangeSkippedCount,
+        })
+      } else {
+        log.info("range fully archived by concurrent operations, skipped", {
+          sessionID: input.sessionID,
+          originalStart: range.startMessageId,
+          originalEnd: range.endMessageId,
+          skippedCount: rangeSkippedCount,
+        })
+      }
+    } catch (e) {
+      // Fix rangeEnd if we partially archived before failure
+      if (anchorId && actualRangeEnd) {
+        // Count the partially archived messages regardless of rangeEnd fix success
+        archivedCount += rangeArchivedCount
+        skippedCount += rangeSkippedCount
+
+        const correctedRangeEnd = actualRangeEnd // Capture for closure (TypeScript narrowing)
+        const expectedSummary = summary.summary // Verify ownership before correcting
+        try {
+          await Storage.update<MessageV2.Info>(["message", input.sessionID, anchorId], (draft) => {
+            // Only correct rangeEnd if this archive was created by us (same summary)
+            if (draft.archive && draft.archive.summary === expectedSummary) {
+              draft.archive.rangeEnd = correctedRangeEnd
+            }
+          })
+          log.debug("fixed anchor rangeEnd after partial failure", {
+            sessionID: input.sessionID,
+            anchorId,
+            actualRangeEnd,
+            archivedCount: rangeArchivedCount,
+          })
+        } catch (updateError) {
+          log.error("failed to update anchor rangeEnd after partial failure", {
+            anchorId,
+            actualRangeEnd,
+            error: updateError,
+          })
+        }
+      }
+
+      const errorMsg = e instanceof Error ? e.message : String(e)
+      errors.push(`Failed to archive range ${range.startMessageId}: ${errorMsg}`)
+      log.error("failed to archive range", {
+        sessionID: input.sessionID,
+        startMessageId: range.startMessageId,
+        error: e,
+      })
+      // Continue with next range - partial archival is acceptable
+    }
+  }
+
+  return { archivedCount, skippedCount, errors }
 }
 
 export const CompactTool = Tool.define("compact", {
@@ -387,6 +609,16 @@ export const CompactTool = Tool.define("compact", {
       summarizationError = "No model information available in session (no assistant messages yet)"
     }
 
+    // Store archive metadata to messages (only if we have summaries)
+    let archivalResult: ArchiveMetadataResult = { archivedCount: 0, skippedCount: 0, errors: [] }
+    if (Object.keys(summaries).length > 0) {
+      archivalResult = await storeArchiveMetadata({
+        sessionID: ctx.sessionID,
+        validatedRanges,
+        summaries,
+      })
+    }
+
     // Build success output with summaries and token estimates
     const totalMessages = validatedRanges.reduce((sum, r) => sum + r.messages.length, 0)
     let totalTokens = 0
@@ -405,15 +637,31 @@ export const CompactTool = Tool.define("compact", {
 
     const summaryCount = Object.keys(summaries).length
     const errorNote = summarizationError ? `\n\nNote: ${summarizationError}` : ""
+    const archivalNote =
+      archivalResult.errors.length > 0 ? `\n\nArchival issues: ${archivalResult.errors.join("; ")}` : ""
+    const skippedNote =
+      archivalResult.skippedCount > 0
+        ? `\n\nSkipped ${archivalResult.skippedCount} message(s) already archived by concurrent operation.`
+        : ""
+
+    // Determine title and status based on archival outcome
+    const archived = archivalResult.archivedCount > 0
+    const title = archived ? "Compaction complete" : "Compaction summaries generated"
+    const statusText = archived
+      ? `Archived ${archivalResult.archivedCount} messages (~${totalTokens.toLocaleString()} tokens) across ${summaryCount} range(s).`
+      : `${totalMessages} messages (~${totalTokens.toLocaleString()} tokens) ready for archival.`
 
     return {
-      title: "Compaction summaries generated",
-      output: `Generated summaries for ${normalized.length} range(s) (${summaryCount}/${normalized.length} successful):\n\n${rangeDetails}\n\nTotal: ${totalMessages} messages (~${totalTokens.toLocaleString()} tokens) ready for archival.${errorNote}`,
+      title,
+      output: `Generated summaries for ${normalized.length} range(s) (${summaryCount}/${normalized.length} successful):\n\n${rangeDetails}\n\nTotal: ${statusText}${errorNote}${archivalNote}${skippedNote}`,
       metadata: {
         rangeCount: normalized.length,
         totalMessages,
         totalTokens,
         summaries,
+        archived: archivalResult.archivedCount,
+        ...(archivalResult.skippedCount > 0 && { skipped: archivalResult.skippedCount }),
+        ...(archivalResult.errors.length > 0 && { archivalErrors: archivalResult.errors }),
         ...(summarizationError && { error: summarizationError }),
       },
     }
