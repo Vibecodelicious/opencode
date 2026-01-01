@@ -1,6 +1,6 @@
 # Story 2.6: LLM Autonomous Compaction Decision
 
-Status: Ready for Review
+Status: Done
 
 ## Story
 
