@@ -1,18 +1,44 @@
-Validates message ranges and generates intelligent summaries for compaction. For each range, an LLM call generates a concise summary (1-3 sentences) and 3-7 semantic index terms for future retrieval.
+Archive message ranges with intelligent summaries for context management.
 
-Usage: call with `ranges: [{ startMessageId: "msg_abc", endMessageId?: "msg_xyz" }]`; ranges are inclusive and may be a single message when `endMessageId` is omitted.
+This tool compacts message ranges by:
+1. Generating a concise summary (1-3 sentences) of the content
+2. Extracting 3-7 semantic index terms for future retrieval
+3. Storing archive metadata on messages
+4. Replacing original content with a [SMART_ARCHIVED] placeholder in context
 
-Validation rules:
+WHEN TO USE:
+Use when the user explicitly requests archiving/compacting messages:
+- "archive the authentication discussion"
+- "compact messages msg_abc to msg_xyz"
+- "save our earlier debugging session"
+- "free up context space"
+- "compact everything before this"
+
+HOW TO IDENTIFY MESSAGE RANGES:
+1. **Direct IDs**: User provides specific message IDs (e.g., "compact msg_abc to msg_xyz")
+2. **Topic-based**: Identify messages discussing the topic user mentions, determine first and last message IDs in that discussion
+3. **Positional**: "before this" means messages prior to current exchange; "first half" means early messages
+
+PARAMETERS:
+{
+  "ranges": [{
+    "startMessageId": "msg_abc",       // Required: first message ID
+    "endMessageId": "msg_xyz"          // Optional: last message ID (defaults to start for single message)
+  }]
+}
+
+Multiple ranges can be archived in a single call.
+
+VALIDATION RULES:
 - All message IDs must exist in the session
-- startMessageId must come before endMessageId chronologically (message IDs are lexicographically sortable)
-- Start and end messages must not be already archived (have `archive` or `archivedBy` fields)
-- Multiple ranges must not overlap with each other
-- Archived messages in the middle of a range are allowed
+- startMessageId must come before endMessageId chronologically
+- Start and end messages must not already be archived
+- Multiple ranges must not overlap
 
-Output includes:
-- Range details with message counts and token estimates
-- Generated summary capturing essence of content
-- Index terms for semantic retrieval
-- Total messages and tokens ready for archival
+AFTER COMPACTION - REPORT TO USER:
+- Confirmation: "Archived X messages from msg_abc to msg_xyz"
+- Token savings: "Freed ~Y tokens of context space"
+- Summary: Show the generated summary so user knows what's preserved
+- Retrieval hint: "A retrieve tool will be available to restore archived content (not yet implemented)"
 
-Note: This tool generates summaries but does not yet update message metadata with archive fields (Story 2.3).
+The archived messages will appear as a [SMART_ARCHIVED] placeholder in conversation history, showing the summary and index terms.

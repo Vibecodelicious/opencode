@@ -37,22 +37,22 @@ story_location: docs/sprint-artifacts
 
 development_status:
   # Epic 1: Foundation & Context Awareness
-  epic-1: in-progress
+  epic-1: done
   1-1-context-gauge-part-type: done
-  1-2-context-gauge-injection-logic: review
-  1-3-message-schema-extension-for-archive-fields: review
-  1-4-id-annotated-context-builder: review
-  1-5-configuration-extension-for-compaction-mode: review
-  1-6-tool-registration-setup: review
+  1-2-context-gauge-injection-logic: done
+  1-3-message-schema-extension-for-archive-fields: done
+  1-4-id-annotated-context-builder: done
+  1-5-configuration-extension-for-compaction-mode: done
+  1-6-tool-registration-setup: done
   epic-1-retrospective: optional
 
   # Epic 2: Smart Compaction
   epic-2: in-progress
   2-1-compact-tool-basic-structure: done
-  2-2-compaction-llm-call-for-summary-generation: review
+  2-2-compaction-llm-call-for-summary-generation: done
   2-3-archive-metadata-storage: done
-  2-4-placeholder-generation-and-context-display: backlog
-  2-5-user-directed-compaction-via-tool-call: backlog
+  2-4-placeholder-generation-and-context-display: done  # Pre-implemented in Story 2.3
+  2-5-user-directed-compaction-via-tool-call: done
   2-6-llm-autonomous-compaction-decision: backlog
   2-7-data-integrity-and-persistence-guarantees: backlog
   epic-2-retrospective: optional

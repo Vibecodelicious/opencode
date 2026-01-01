@@ -736,6 +736,7 @@ Retrieved content from archive msg_abc to msg_xyz:
 - Read original `parts[]` from messages in range
 - Format output for LLM readability
 - Does NOT remove archive metadata (retrieval is non-destructive)
+- **Update compact.txt**: Remove "(not yet implemented)" from retrieval hint once this story is complete
 
 **Prerequisites:** Epic 2 complete
 
