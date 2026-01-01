@@ -7,12 +7,129 @@ This tool compacts message ranges by:
 4. Replacing original content with a [SMART_ARCHIVED] placeholder in context
 
 WHEN TO USE:
+
+**User-Directed Compaction:**
 Use when the user explicitly requests archiving/compacting messages:
 - "archive the authentication discussion"
 - "compact messages msg_abc to msg_xyz"
 - "save our earlier debugging session"
 - "free up context space"
 - "compact everything before this"
+
+**AUTONOMOUS COMPACTION DECISION:**
+You can proactively decide to compact WITHOUT user request. Monitor the context gauge checkpoints that appear in conversation (format: [CONTEXT GAUGE: X / Y tokens (Z%)]).
+
+When to autonomously compact:
+
+1. **Context gauge >60% utilization** AND you observe:
+   - Large tool outputs (>5000 tokens) whose key insights you've already captured in your responses
+   - Completed discussions where conclusions are documented in context
+   - Verbose file contents whose relevant learnings are preserved in your analysis
+   - Long command outputs whose meaning has been distilled into your working context
+
+2. **Context gauge >80% utilization:**
+   - Strongly consider compacting
+   - Prioritize content where learnings are already captured elsewhere
+   - Multiple ranges may be appropriate to maximize space
+
+3. **Content detection patterns:**
+   - Voluminous tool outputs: File reads, grep results, command outputs - IF key insights are captured in your responses/thinking
+   - Completed discussions: Feature discussions that concluded, debugging resolved, decisions made and documented
+   - Reference material: Documentation/examples consulted where relevant information is now in working context
+
+**CRITICAL: Before compacting, verify the learnings are preserved**
+Raw content can be archived when the *meaning* is captured elsewhere:
+- In your prior responses/analysis (e.g., "learned X works this way")
+- In the compaction summary you'll generate
+- In code/artifacts created as a result
+- In decisions/conclusions already documented
+
+Do NOT compact just because you "read" something - compact when the insights are safe.
+
+**Context gauge interpretation:**
+- <30%: No compaction needed
+- 30-60%: Monitor; compact only if very large outputs with learnings already captured
+- 60-80%: Consider compacting completed discussions where conclusions are documented
+- >80%: Strongly consider compacting; prioritize freeing significant space
+
+**LOOP/ITERATION DETECTION:**
+When working through debugging, retrying, or iterating:
+
+1. **Detect iteration patterns:** Recognize when you're in a loop (debugging attempts, retry cycles, trial-and-error fixing)
+
+2. **When to compact iterations:** Prior iterations may be compacted once a NEW iteration begins and you have learned from the previous ones
+
+3. **CRITICAL - Before compacting loop iterations, identify what MUST be preserved:**
+   - What was tried in each iteration
+   - What was learned (errors, insights, partial successes)
+   - Any constraints discovered that affect future attempts
+   - The current hypothesis or next approach
+
+4. **The summary MUST capture learnings, not just "tried X, failed"**
+
+**Good iteration summary example:**
+"Iterations 1-3: Tried fixing auth via token refresh (failed - tokens were valid), session storage (failed - sessions persisting correctly), found root cause in middleware ordering. Constraint: must apply auth middleware before rate limiting."
+
+**Bad iteration summary example:**
+"Debugging session for authentication issues."
+
+The bad example loses critical information about what was tried and learned. A future retrieve would not restore the debugging insights.
+
+**RANGE PARTITIONING:**
+Consider splitting a contiguous range into MULTIPLE archives when:
+
+1. **Different topics/tasks intermixed:** A single discussion covered multiple unrelated topics
+   - Separate summaries are more useful for targeted retrieval later
+   - Example: Messages 1-20 covered auth setup (1-8), database schema (9-15), and deployment (16-20) → partition into 3 ranges
+
+2. **User might want partial retrieval:** Different sections have different relevance
+   - Example: A code review covered 5 files; partition so user can retrieve comments on specific files
+
+3. **Single summary would lose distinctions:** Important nuances between sub-topics
+   - Example: Two competing approaches were discussed; each deserves its own summary capturing trade-offs
+
+**How to identify topic boundaries:**
+- Look for context switches (new file, new problem, new feature)
+- Observe when the discussion focus shifts
+- Note when you started working on something different
+
+**Partitioning in practice:**
+Provide multiple ranges in a SINGLE compact call (not multiple calls):
+```json
+{
+  "ranges": [
+    {"startMessageId": "msg_1", "endMessageId": "msg_8"},
+    {"startMessageId": "msg_9", "endMessageId": "msg_15"},
+    {"startMessageId": "msg_16", "endMessageId": "msg_20"}
+  ]
+}
+```
+Each range gets its own summary and index terms for targeted retrieval.
+
+**COMPACTION MODES:**
+The user can configure compaction mode in their settings. Respect the configured mode:
+
+1. **"ask" mode:** Before compacting autonomously, explain what you want to compact and WHY, then wait for user approval before proceeding.
+   - Present: content identified, expected savings, reasoning
+   - Wait for explicit "yes" / approval before calling the tool
+
+2. **"notify" mode (default):** Compact when appropriate, then explain what you did in your response.
+   - Proceed with compaction
+   - Report: what was archived, tokens freed, summary generated
+   - Include your reasoning for why you compacted
+
+3. **"silent" mode:** Compact without mentioning it to the user.
+   - Proceed with compaction
+   - Do not report or explain in your response
+   - User sees only the [SMART_ARCHIVED] placeholder in history
+
+**For ask/notify modes, explain your reasoning:**
+Include in your explanation:
+- Current context utilization level (from context gauge)
+- What content you identified for compaction
+- Why this content is suitable (learnings captured in responses, discussion concluded, etc.)
+- Expected token savings
+- What information is preserved in the summary
 
 HOW TO IDENTIFY MESSAGE RANGES:
 1. **Direct IDs**: User provides specific message IDs (e.g., "compact msg_abc to msg_xyz")
@@ -40,5 +157,8 @@ AFTER COMPACTION - REPORT TO USER:
 - Token savings: "Freed ~Y tokens of context space"
 - Summary: Show the generated summary so user knows what's preserved
 - Retrieval hint: "A retrieve tool will be available to restore archived content (not yet implemented)"
+
+**Example autonomous compaction explanation:**
+"Context is at 72%. The earlier file exploration (~4000 tokens) yielded insights I've already captured in my analysis above (channels are simplex, auth requires two-phase handshake). The summary will preserve these key findings, so the raw file contents can be archived."
 
 The archived messages will appear as a [SMART_ARCHIVED] placeholder in conversation history, showing the summary and index terms.
