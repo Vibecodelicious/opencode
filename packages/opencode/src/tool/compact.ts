@@ -627,7 +627,7 @@ export async function validateArchiveReferences(sessionID: string): Promise<Refe
 
   // Warn about potential performance impact for large sessions
   if (messages.length > 1000) {
-    log.warn("validating references for large session - consider lazy validation", {
+    log.warn("validating references for large session - this may be slow", {
       sessionID,
       messageCount: messages.length,
     })

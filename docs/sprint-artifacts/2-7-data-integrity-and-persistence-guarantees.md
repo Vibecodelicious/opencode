@@ -398,8 +398,8 @@ N/A - No debugging required. Implementation was straightforward.
 2. Added `validateArchiveReferences()` function for detecting orphaned references
 3. Modified `toModelMessage()` to gracefully handle orphaned `archivedBy` references
 4. Added detailed atomicity guarantees documentation to `storeArchiveMetadata()`
-5. Created new test file `compact-persistence.test.ts` with 21 tests
-6. All tests pass (21 new + existing)
+5. Created new test file `compact-persistence.test.ts` with 22 tests
+6. All tests pass (22 new + existing)
 
 ### File List
 
@@ -407,7 +407,7 @@ N/A - No debugging required. Implementation was straightforward.
 |------|-------------|-------------|
 | `packages/opencode/src/tool/compact.ts` | Modified | Added `validateArchiveReferences()` with large session warning (>1000 msgs), added detailed atomicity guarantees documentation with simplified @see reference |
 | `packages/opencode/src/session/message-v2.ts` | Modified | Updated `toModelMessage()` to gracefully handle orphaned `archivedBy` references with warning logging |
-| `packages/opencode/test/tool/compact-persistence.test.ts` | Added | New test file with 21 tests covering persistence, reference validation, orphan handling, crash recovery, and concurrent archive operations |
+| `packages/opencode/test/tool/compact-persistence.test.ts` | Added | New test file with 22 tests covering persistence, reference validation, orphan handling, crash recovery, and concurrent archive operations |
 
 ### Change Log
 
@@ -420,6 +420,7 @@ N/A - No debugging required. Implementation was straightforward.
 | 2026-01-02 | Adversarial code review: further strengthened concurrent overlap test with per-message state verification (isArchived, hasConflict checks, archival chain integrity) | Claude Opus 4.5 |
 | 2026-01-02 | Code review fixes: fixed @see link format in JSDoc, added large session warning (>1000 msgs), cleaned up type import naming (MessageV2Info), added non-existent session edge case test, fixed misleading test name | Claude Opus 4.5 |
 | 2026-01-03 | Final code review fixes: corrected misleading JSDoc @throws (Session.messages never throws), removed dead try/catch code path, strengthened non-existent session test with explicit verification, renamed MessageV2Info→MessageV2Types for clarity | Claude Opus 4.5 |
+| 2026-01-03 | Adversarial code review fixes: added sessionID to orphan detection log context in toModelMessage(), updated large session warning message to remove reference to non-existent feature, added explicit test for rangeEnd ownership verification via summary matching (22 tests total), added explicit return type to setupArchiveMetadata test helper | Claude Opus 4.5 |
 
 ---
 

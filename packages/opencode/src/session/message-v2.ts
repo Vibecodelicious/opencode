@@ -624,6 +624,7 @@ export namespace MessageV2 {
           // Orphan detected - log at debug level to avoid noise (called on every render)
           // Use validateArchiveReferences() for diagnostic purposes
           log.debug("orphaned archivedBy reference, rendering message normally", {
+            sessionID: msg.info.sessionID,
             messageID: msg.info.id,
             archivedBy: msg.info.archivedBy,
           })
