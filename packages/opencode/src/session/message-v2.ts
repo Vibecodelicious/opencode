@@ -11,6 +11,9 @@ import { Storage } from "@/storage/storage"
 import { ProviderTransform } from "@/provider/transform"
 import { STATUS_CODES } from "http"
 import { iife } from "@/util/iife"
+import { Log } from "@/util/log"
+
+const log = Log.create({ service: "message-v2" })
 
 export namespace MessageV2 {
   export const OutputLengthError = NamedError.create("MessageOutputLengthError", z.object({}))
@@ -584,6 +587,14 @@ export namespace MessageV2 {
   ): ModelMessage[] {
     const result: UIMessage[] = []
 
+    // Build a set of valid archive anchors for orphan detection
+    const archiveAnchors = new Set<string>()
+    for (const msg of input) {
+      if (msg.info.archive) {
+        archiveAnchors.add(msg.info.id)
+      }
+    }
+
     for (const msg of input) {
       if (msg.info.archive) {
         const archive = msg.info.archive
@@ -606,7 +617,22 @@ export namespace MessageV2 {
         continue
       }
 
-      if (msg.info.archivedBy) continue
+      if (msg.info.archivedBy) {
+        // Gracefully handle orphaned archivedBy references:
+        // If the anchor doesn't exist, render the message normally instead of skipping
+        if (!archiveAnchors.has(msg.info.archivedBy)) {
+          // Orphan detected - log at debug level to avoid noise (called on every render)
+          // Use validateArchiveReferences() for diagnostic purposes
+          log.debug("orphaned archivedBy reference, rendering message normally", {
+            messageID: msg.info.id,
+            archivedBy: msg.info.archivedBy,
+          })
+          // Fall through to normal rendering
+        } else {
+          // Valid anchor exists - skip this message (anchor will render placeholder)
+          continue
+        }
+      }
 
       if (msg.parts.length === 0) continue
 

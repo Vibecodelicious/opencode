@@ -396,10 +396,35 @@ export interface ArchiveMetadataResult {
  * - If original first message is already archived, next unarchived message is promoted to anchor
  * - Original message content is preserved (only metadata fields are added)
  *
- * ## Atomicity
- * Uses Storage.update() which provides file locking for atomic updates per message.
- * Anchor selection happens inside the lock to handle race conditions correctly.
- * Each range is processed independently - partial success is acceptable.
+ * ## Atomicity Guarantees
+ *
+ * This function provides the following guarantees backed by Storage.update():
+ *
+ * 1. **Per-message atomicity**: Each message update via Storage.update() is atomic.
+ *    The file is read, modified, and written under an exclusive lock (Lock.write()).
+ *    If the process crashes during write, Bun's atomic write (temp file + rename)
+ *    ensures the file remains in its pre-update state.
+ *
+ * 2. **Partial range success**: If a range fails mid-way (e.g., Storage.update() throws),
+ *    messages already archived remain archived. The anchor's rangeEnd is corrected to
+ *    the actual last archived message, ensuring no orphaned archivedBy references point
+ *    to non-existent anchors within this operation.
+ *
+ * 3. **Crash recovery**: On crash, the worst case is:
+ *    - Some messages in a range are archived, others aren't
+ *    - The anchor's rangeEnd may be incorrect (will be corrected on next archive attempt
+ *      or can be detected via validateArchiveReferences())
+ *    - Original content is NEVER lost (we only add metadata fields, never modify parts[])
+ *
+ * 4. **Race condition protection**: Each message update checks inside the lock if the
+ *    message was already archived by a concurrent operation, and skips if so. This
+ *    prevents duplicate archival and ensures consistent state.
+ *
+ * 5. **RangeEnd ownership verification**: When correcting rangeEnd after partial archival,
+ *    we verify the anchor's summary matches our operation to avoid overwriting concurrent
+ *    operations' rangeEnd values.
+ *
+ * @see Storage.update for the underlying atomic update implementation
  *
  * ## Idempotency
  * This function is idempotent in terms of final state - calling it multiple times with the
@@ -560,6 +585,96 @@ export async function storeArchiveMetadata(input: ArchiveMetadataInput): Promise
   }
 
   return { archivedCount, skippedCount, errors }
+}
+
+// ============================================================================
+// Reference Validation (Story 2.7)
+// ============================================================================
+
+/**
+ * Result of validating archive references in a session.
+ */
+export interface ReferenceValidationResult {
+  /** Whether all references are valid */
+  valid: boolean
+  /** Message IDs that have archivedBy but no corresponding anchor */
+  orphanedMessages: string[]
+  /** Anchor IDs whose rangeEnd points to a non-existent message */
+  brokenAnchors: string[]
+}
+
+/**
+ * Validates archive references in a session for consistency.
+ *
+ * Checks for:
+ * 1. Orphaned archivedBy references - messages pointing to anchors that don't exist
+ * 2. Broken rangeEnd references - anchors pointing to non-existent end messages
+ *
+ * This function is useful for:
+ * - Debugging archive consistency issues
+ * - Validating data integrity after crash recovery
+ * - Identifying corruption from concurrent operations
+ *
+ * Note: For non-existent sessions, this returns `{valid: true, orphanedMessages: [], brokenAnchors: []}`
+ * (vacuously true - no messages means no invalid references). Use Session.get() first if you
+ * need to verify the session exists.
+ *
+ * @param sessionID - The session to validate
+ * @returns Validation result with lists of orphaned/broken references
+ */
+export async function validateArchiveReferences(sessionID: string): Promise<ReferenceValidationResult> {
+  const messages = await Session.messages({ sessionID })
+
+  // Warn about potential performance impact for large sessions
+  if (messages.length > 1000) {
+    log.warn("validating references for large session - consider lazy validation", {
+      sessionID,
+      messageCount: messages.length,
+    })
+  }
+
+  // Collect all archive anchors
+  const archiveAnchors = new Map<string, MessageV2.Archive>()
+  for (const msg of messages) {
+    if (msg.info.archive) {
+      archiveAnchors.set(msg.info.id, msg.info.archive)
+    }
+  }
+
+  // Check for orphaned archivedBy references
+  const orphanedMessages: string[] = []
+  for (const msg of messages) {
+    if (msg.info.archivedBy) {
+      if (!archiveAnchors.has(msg.info.archivedBy)) {
+        orphanedMessages.push(msg.info.id)
+      }
+    }
+  }
+
+  // Check for broken rangeEnd references
+  const messageIds = new Set(messages.map((m) => m.info.id))
+  const brokenAnchors: string[] = []
+  for (const [anchorId, archive] of archiveAnchors) {
+    if (archive.rangeEnd && !messageIds.has(archive.rangeEnd)) {
+      brokenAnchors.push(anchorId)
+    }
+  }
+
+  const valid = orphanedMessages.length === 0 && brokenAnchors.length === 0
+
+  if (!valid) {
+    log.warn("archive reference validation failed", {
+      sessionID,
+      orphanedCount: orphanedMessages.length,
+      brokenAnchorCount: brokenAnchors.length,
+    })
+  }
+
+  return {
+    valid,
+    orphanedMessages,
+    brokenAnchors,
+  }
 }
 
 export const CompactTool = Tool.define("compact", {

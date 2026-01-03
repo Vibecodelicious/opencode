@@ -54,7 +54,7 @@ development_status:
   2-4-placeholder-generation-and-context-display: done  # Pre-implemented in Story 2.3
   2-5-user-directed-compaction-via-tool-call: done
   2-6-llm-autonomous-compaction-decision: done
-  2-7-data-integrity-and-persistence-guarantees: backlog
+  2-7-data-integrity-and-persistence-guarantees: done
   epic-2-retrospective: optional
 
   # Epic 3: Content Retrieval
