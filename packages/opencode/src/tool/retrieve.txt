@@ -33,6 +33,44 @@ IMPORTANT NOTES:
 - The retrieved content is appended to context as a tool result
 - Use this when you need the details; the summary is often sufficient for context
 
+AUTONOMOUS RETRIEVAL:
+Proactively retrieve when archived content would help answer the current question or task.
+
+WHEN TO RETRIEVE:
+
+1. **Index term match:** User's question matches archive index terms
+   - Example: User asks about "auth middleware" and an archive's index contains "authentication, middleware, session handling"
+
+2. **Summary insufficient:** Need specifics beyond what the summary provides
+   - Example: Summary says "Fixed auth bug" but user needs the exact code change or debugging steps
+
+3. **Explicit reference:** User asks about something that was archived
+   - Example: "What did we decide about the database schema earlier?"
+
+4. **Task dependency:** Current implementation needs archived details
+   - Example: Implementing feature B that depends on approach discussed in archived feature A discussion
+
+WHEN NOT TO RETRIEVE:
+
+1. **Summary answers the question:** High-level queries don't need full content
+   - If user asks "Did we discuss auth?" and summary says "Debugged auth middleware ordering" - that answers it
+
+2. **Unrelated to current task:** Don't retrieve just because archives exist
+   - Working on UI styling doesn't warrant retrieving archived backend discussion
+
+3. **Already retrieved:** Same archive already in current context
+   - Check if you've already retrieved this archiveId before retrieving again
+
+RETRIEVAL DOESN'T REQUIRE PERMISSION:
+Unlike compaction (which removes content), retrieval is read-only and only adds context. Proceed when helpful without waiting for user approval.
+
+EXPLANATION (ask/notify modes):
+When the user's compaction mode is "ask" or "notify", briefly state what you're retrieving and why:
+- "Retrieving the auth discussion - the summary doesn't have the middleware order you're asking about."
+- "Pulling up the earlier debugging session to find the specific error messages."
+
+In "silent" mode, retrieve without explanation.
+
 EXAMPLE:
 If you see "[SMART_ARCHIVED: msg_abc123 to msg_def456] Summary: Debugged auth issue, found middleware ordering problem"
 and need the specific debugging steps, call:
