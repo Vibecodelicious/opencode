@@ -131,6 +131,13 @@ Include in your explanation:
 - Expected token savings
 - What information is preserved in the summary
 
+**ASK MODE BEHAVIOR:**
+When the user's compaction mode is "ask", the tool uses the native permission system:
+- A permission dialog appears in the UI showing: message ranges, count, and token estimates
+- The user can approve (once or always) or reject via the standard permission menu
+- If rejected, a Permission.RejectedError is thrown and compaction is cancelled
+- You can simply call the tool normally - no special parameters needed
+
 HOW TO IDENTIFY MESSAGE RANGES:
 1. **Direct IDs**: User provides specific message IDs (e.g., "compact msg_abc to msg_xyz")
 2. **Topic-based**: Identify messages discussing the topic user mentions, determine first and last message IDs in that discussion

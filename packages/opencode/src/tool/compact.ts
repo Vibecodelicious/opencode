@@ -11,6 +11,8 @@ import { Log } from "../util/log"
 import { Token } from "../util/token"
 import { mergeDeep, pipe } from "remeda"
 import { Storage } from "../storage/storage"
+import { Config } from "../config/config"
+import { Permission } from "../permission"
 
 const log = Log.create({ service: "tool.compact" })
 
@@ -698,6 +700,48 @@ export const CompactTool = Tool.define("compact", {
     for (const range of normalized) {
       const { messages } = await validateSingleRange(ctx.sessionID, range, allMessages)
       validatedRanges.push({ range, messages })
+    }
+
+    // Read compaction mode from config
+    const config = await Config.get()
+    const compactionMode = config.compaction?.mode ?? "notify"
+
+    // ASK MODE: Use Permission system to request user approval via native TUI
+    if (compactionMode === "ask") {
+      // Calculate token estimates for the permission request
+      const totalMessages = validatedRanges.reduce((sum, r) => sum + r.messages.length, 0)
+      let totalTokens = 0
+      const rangeDescriptions = validatedRanges
+        .map((r) => {
+          const tokenEstimate = estimateTokensForMessages(r.messages)
+          totalTokens += tokenEstimate
+          return `${r.range.startMessageId} to ${r.range.endMessageId}: ${r.messages.length} msg, ~${tokenEstimate.toLocaleString()} tokens`
+        })
+        .join("; ")
+
+      log.info("ask mode: requesting permission", {
+        sessionID: ctx.sessionID,
+        rangeCount: normalized.length,
+        totalMessages,
+        totalTokens,
+      })
+
+      // Request permission via native TUI dialog
+      // Throws Permission.RejectedError if user declines
+      await Permission.ask({
+        type: "compact",
+        sessionID: ctx.sessionID,
+        messageID: ctx.messageID,
+        callID: ctx.callID,
+        title: `Archive ${totalMessages} message${totalMessages === 1 ? "" : "s"} (~${totalTokens.toLocaleString()} tokens)`,
+        metadata: {
+          ranges: params.ranges,
+          totalMessages,
+          totalTokens,
+          rangeDescriptions,
+        },
+      })
+      // If we reach here, permission was granted - continue with compaction
     }
 
     // Get model from session messages and generate summaries
