@@ -156,7 +156,7 @@ AFTER COMPACTION - REPORT TO USER:
 - Confirmation: "Archived X messages from msg_abc to msg_xyz"
 - Token savings: "Freed ~Y tokens of context space"
 - Summary: Show the generated summary so user knows what's preserved
-- Retrieval hint: "A retrieve tool will be available to restore archived content (not yet implemented)"
+- Retrieval hint: "Use the retrieve tool with the archive ID to restore archived content if needed"
 
 **Example autonomous compaction explanation:**
 "Context is at 72%. The earlier file exploration (~4000 tokens) yielded insights I've already captured in my analysis above (channels are simplex, auth requires two-phase handshake). The summary will preserve these key findings, so the raw file contents can be archived."

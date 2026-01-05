@@ -1,1 +1,39 @@
-Placeholder retrieval tool. Accepts an archiveId (the first message ID of an archived range) and returns a "Not yet implemented" response without reading or restoring data. Usage: call with `{ archiveId: "msg_abc" }` typically when you see a `[SMART_ARCHIVED: ...]` placeholder. This stub performs no retrieval and makes no storage changes.
+Retrieve original content from an archived conversation range.
+
+This tool restores archived content so you can review the full original messages that were previously compacted into a [SMART_ARCHIVED] placeholder.
+
+WHEN TO USE:
+- When you need to see the original content that was archived
+- When the summary in a [SMART_ARCHIVED] placeholder doesn't provide enough detail
+- When you need to reference specific code, commands, or discussions from the archived range
+- When debugging issues that may relate to previously archived content
+
+HOW TO FIND THE ARCHIVE ID:
+Look for placeholders in the conversation that look like:
+  [SMART_ARCHIVED: msg_abc123]
+  or
+  [SMART_ARCHIVED: msg_abc123 to msg_xyz789]
+
+The archiveId is the FIRST message ID shown (e.g., "msg_abc123").
+
+PARAMETERS:
+{
+  "archiveId": "msg_abc123"  // Required: the first message ID from the placeholder
+}
+
+WHAT YOU GET BACK:
+- All original messages from the archived range, formatted with their message IDs
+- User and assistant messages with their full content
+- Tool outputs that were completed during that range
+- Token count estimate for the retrieved content
+
+IMPORTANT NOTES:
+- Retrieval is READ-ONLY: it does not modify or remove the archive metadata
+- After retrieval, the archived messages still appear as placeholders in normal conversation
+- The retrieved content is appended to context as a tool result
+- Use this when you need the details; the summary is often sufficient for context
+
+EXAMPLE:
+If you see "[SMART_ARCHIVED: msg_abc123 to msg_def456] Summary: Debugged auth issue, found middleware ordering problem"
+and need the specific debugging steps, call:
+{ "archiveId": "msg_abc123" }

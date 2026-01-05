@@ -123,15 +123,16 @@ describe("tool.compact and tool.retrieve stubs", () => {
     })
   })
 
-  test("retrieve returns stubbed placeholder response", async () => {
+  test("retrieve returns error for non-existent archive ID", async () => {
     await withSandbox(async ({ Instance, RetrieveTool }) => {
       await Instance.provide({
         directory: projectRoot,
         fn: async () => {
           const tool = await RetrieveTool.init()
           const result = await tool.execute({ archiveId: "archive-1" }, ctx)
-          expect(result.output.toLowerCase()).toContain("not yet implemented")
-          expect(result.metadata).toEqual({})
+          // Retrieve now returns a proper error for non-existent archive IDs
+          expect(result.output.toLowerCase()).toContain("does not exist")
+          expect(result.metadata.error).toBe("not_found")
         },
       })
     })
