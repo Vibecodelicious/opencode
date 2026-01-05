@@ -30,7 +30,7 @@ async function createTestSession(sessionDir: string) {
     sessionID: session.id,
     messageID: msg1Id,
     type: "text",
-    text: "First message with some content for testing compaction ask mode",
+    text: "Can you help me understand how the authentication flow works in this codebase? I need to add a new OAuth provider.",
   })
 
   // Create assistant message 2
@@ -53,7 +53,7 @@ async function createTestSession(sessionDir: string) {
     sessionID: session.id,
     messageID: msg2Id,
     type: "text",
-    text: "Second message with assistant response content for testing",
+    text: "The authentication flow uses JWT tokens stored in httpOnly cookies. The main entry point is `src/auth/handler.ts` which validates tokens via the `AuthMiddleware` class. For OAuth, you'll need to implement the `OAuthProvider` interface defined in `src/auth/providers/base.ts`.",
   })
 
   // Create user message 3
@@ -71,7 +71,7 @@ async function createTestSession(sessionDir: string) {
     sessionID: session.id,
     messageID: msg3Id,
     type: "text",
-    text: "Third message with more content for ask mode testing",
+    text: "Thanks! Can you show me an example of how Google OAuth is implemented? I want to use it as a reference.",
   })
 
   return { session, msgIds: [msg1Id, msg2Id, msg3Id] }
@@ -358,12 +358,19 @@ describe("compact tool ask mode", () => {
             })
           }
 
+          const messageContents = [
+            "What's the best way to handle database migrations in this project?",
+            "The project uses Drizzle ORM for migrations. Run `bun db:migrate` to apply pending migrations. Schema files are in `src/db/schema/`.",
+            "I see there's a users table. How do I add a new column for user preferences?",
+            "Create a new migration with `bun db:generate` after modifying the schema. The preferences column should use JSONB type for flexibility.",
+            "Perfect, that makes sense. Let me try adding the column now.",
+          ]
           await Session.updatePart({
             id: Identifier.ascending("part"),
             sessionID: session.id,
             messageID: msgId,
             type: "text",
-            text: `Message ${i + 1} with content for testing token estimation in ask mode`,
+            text: messageContents[i],
           })
         }
 

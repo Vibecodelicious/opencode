@@ -10,35 +10,41 @@ So that I approve every compaction decision.
 
 ## Acceptance Criteria
 
-1. **Mode Detection**
+1. **Mode Detection** ✅
    - Given compaction mode is set to "ask" in config
    - When the LLM decides to compact content autonomously
    - Then the tool detects the mode before execution
 
-2. **Permission Request**
+2. **Permission Request** ✅
    - Given mode is "ask"
    - When the LLM wants to compact
    - Then instead of executing immediately, present:
-     - What will be archived (message range)
-     - Estimated token savings
-     - The proposed summary (if pre-generated)
-   - And ask: "Proceed with compaction? (yes/no)"
+     - What will be archived (message range) ✅
+     - Estimated token savings ✅
+     - The proposed summary (if pre-generated) — *intentionally skipped, see Implementation Notes*
+   - And ask: "Proceed with compaction? (yes/no)" ✅
 
-3. **User Approval Flow**
+3. **User Approval Flow** ✅
    - Given user says "yes" or approves
    - Then compaction proceeds normally
    - And archived content appears as `[SMART_ARCHIVED]` placeholder
 
-4. **User Rejection Flow**
+4. **User Rejection Flow** ✅
    - Given user says "no" or declines
    - Then compaction is cancelled
    - And conversation continues without modification
    - And no archive metadata is stored
 
-5. **Conversational Interaction**
+5. **Conversational Interaction** — *see Implementation Notes*
    - The interaction must be conversational (not a modal/dialog)
    - LLM explains reasoning in natural language
    - User responds in natural language
+
+### Implementation Notes
+
+**AC 2 - Pre-generated summary:** Summaries are intentionally NOT pre-generated before asking permission. The "(if pre-generated)" qualifier makes this optional. Pre-generating would require an LLM call before getting permission, adding cost and latency. Summaries are generated after approval.
+
+**AC 5 - Permission UI:** Implementation uses OpenCode's native Permission system (modal dialog) rather than a conversational flow. This provides consistent UX with all other tools (bash, edit, write, read) and enables the "Always" option to skip future prompts. The Permission dialog shows message ranges and token estimates clearly.
 
 ## Tasks / Subtasks
 
