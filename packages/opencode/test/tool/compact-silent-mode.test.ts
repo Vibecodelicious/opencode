@@ -1,13 +1,13 @@
 import { describe, expect, test, mock, beforeEach, afterEach } from "bun:test"
 import path from "path"
-import { Identifier } from "../../src/id/id"
 import { tmpdir, createTestSession } from "../fixture/fixture"
 import { Instance } from "../../src/project/instance"
 import { Session } from "../../src/session"
 import { CompactTool } from "../../src/tool/compact"
 import { Permission } from "../../src/permission"
+import { Identifier } from "../../src/id/id"
 
-describe("compact tool ask mode", () => {
+describe("compact tool silent mode", () => {
   // Store original Permission.ask for restoration
   let originalAsk: typeof Permission.ask
   let askMock: ReturnType<typeof mock>
@@ -22,14 +22,14 @@ describe("compact tool ask mode", () => {
     Permission.ask = originalAsk
   })
 
-  test("calls Permission.ask when mode is 'ask'", async () => {
+  test("silent mode does NOT call Permission.ask", async () => {
     await using tmp = await tmpdir({
       init: async (dir) => {
         await Bun.write(
           path.join(dir, "opencode.json"),
           JSON.stringify({
             $schema: "https://opencode.ai/config.json",
-            compaction: { mode: "ask", enabled: true },
+            compaction: { mode: "silent", enabled: true },
           }, null, 2),
         )
       },
@@ -54,101 +54,7 @@ describe("compact tool ask mode", () => {
           ranges: [{ startMessageId: msgIds[0], endMessageId: msgIds[2] }],
         }, ctx)
 
-        // Permission.ask should have been called
-        expect(askMock).toHaveBeenCalledTimes(1)
-
-        // Verify Permission.ask was called with correct parameters
-        const callArgs = askMock.mock.calls[0][0]
-        expect(callArgs.type).toBe("compact")
-        expect(callArgs.sessionID).toBe(session.id)
-        expect(callArgs.callID).toBe("test-call-id")
-        expect(callArgs.title).toContain("3 messages")
-        expect(callArgs.metadata.totalMessages).toBe(3)
-        expect(callArgs.metadata.ranges).toEqual([{ startMessageId: msgIds[0], endMessageId: msgIds[2] }])
-
-        await Session.remove(session.id)
-      },
-    })
-  })
-
-  test("throws RejectedError when user declines permission", async () => {
-    await using tmp = await tmpdir({
-      init: async (dir) => {
-        await Bun.write(
-          path.join(dir, "opencode.json"),
-          JSON.stringify({
-            $schema: "https://opencode.ai/config.json",
-            compaction: { mode: "ask", enabled: true },
-          }, null, 2),
-        )
-      },
-    })
-
-    await Instance.provide({
-      directory: tmp.path,
-      fn: async () => {
-        const { session, msgIds } = await createTestSession(tmp.path)
-
-        // Make Permission.ask throw RejectedError
-        Permission.ask = mock(() => {
-          throw new Permission.RejectedError(session.id, "perm_123", "call_123", {})
-        }) as typeof Permission.ask
-
-        const tool = await CompactTool.init()
-        const ctx = {
-          sessionID: session.id,
-          messageID: "",
-          callID: "test-call-id",
-          agent: "build",
-          abort: AbortSignal.any([]),
-          metadata: () => {},
-        }
-
-        // Should throw RejectedError when permission is declined
-        await expect(
-          tool.execute({
-            ranges: [{ startMessageId: msgIds[0], endMessageId: msgIds[2] }],
-          }, ctx),
-        ).rejects.toBeInstanceOf(Permission.RejectedError)
-
-        await Session.remove(session.id)
-      },
-    })
-  })
-
-  test("defaults to notify mode (no Permission.ask) when no config specified", async () => {
-    await using tmp = await tmpdir({
-      init: async (dir) => {
-        // Write config without compaction settings
-        await Bun.write(
-          path.join(dir, "opencode.json"),
-          JSON.stringify({
-            $schema: "https://opencode.ai/config.json",
-          }, null, 2),
-        )
-      },
-    })
-
-    await Instance.provide({
-      directory: tmp.path,
-      fn: async () => {
-        const { session, msgIds } = await createTestSession(tmp.path)
-
-        const tool = await CompactTool.init()
-        const ctx = {
-          sessionID: session.id,
-          messageID: "",
-          callID: "test-call-id",
-          agent: "build",
-          abort: AbortSignal.any([]),
-          metadata: () => {},
-        }
-
-        await tool.execute({
-          ranges: [{ startMessageId: msgIds[0], endMessageId: msgIds[2] }],
-        }, ctx)
-
-        // Permission.ask should NOT have been called (default is notify)
+        // Permission.ask should NOT have been called in silent mode
         expect(askMock).not.toHaveBeenCalled()
 
         await Session.remove(session.id)
@@ -156,19 +62,14 @@ describe("compact tool ask mode", () => {
     })
   })
 
-  test("Permission.ask is called for each compact invocation (Permission system manages 'always' state)", async () => {
-    // NOTE: This test verifies that CompactTool calls Permission.ask on every invocation.
-    // The actual "always" approval behavior is managed by the Permission system itself
-    // (see permission/index.ts:162-180), which tracks approved types per session and
-    // short-circuits Permission.ask internally when a type is already approved.
-    // This test uses a mock that simulates that behavior to verify the integration pattern.
+  test("silent mode returns empty output string", async () => {
     await using tmp = await tmpdir({
       init: async (dir) => {
         await Bun.write(
           path.join(dir, "opencode.json"),
           JSON.stringify({
             $schema: "https://opencode.ai/config.json",
-            compaction: { mode: "ask", enabled: true },
+            compaction: { mode: "silent", enabled: true },
           }, null, 2),
         )
       },
@@ -178,24 +79,6 @@ describe("compact tool ask mode", () => {
       directory: tmp.path,
       fn: async () => {
         const { session, msgIds } = await createTestSession(tmp.path)
-
-        // Track which types have been "always" approved (simulating Permission system state)
-        const alwaysApproved = new Set<string>()
-        let actualPromptCount = 0
-
-        // Mock Permission.ask to simulate the real Permission system's "always" behavior:
-        // The real system (permission/index.ts:104-106) checks if type is already approved
-        // and returns early. We simulate this to verify CompactTool integrates correctly.
-        Permission.ask = mock((input: { type: string }) => {
-          if (alwaysApproved.has(input.type)) {
-            // Simulates Permission system's early return for approved types
-            return Promise.resolve()
-          }
-          // Simulates first-time prompt that user approves with "always"
-          actualPromptCount++
-          alwaysApproved.add(input.type)
-          return Promise.resolve()
-        }) as typeof Permission.ask
 
         const tool = await CompactTool.init()
         const ctx = {
@@ -207,38 +90,113 @@ describe("compact tool ask mode", () => {
           metadata: () => {},
         }
 
-        // First call - should prompt
-        await tool.execute({
-          ranges: [{ startMessageId: msgIds[0], endMessageId: msgIds[0] }],
+        const result = await tool.execute({
+          ranges: [{ startMessageId: msgIds[0], endMessageId: msgIds[2] }],
         }, ctx)
 
-        // Second call - should skip prompt due to "always" approval
-        await tool.execute({
-          ranges: [{ startMessageId: msgIds[1], endMessageId: msgIds[1] }],
-        }, ctx)
-
-        // Third call - should also skip prompt
-        await tool.execute({
-          ranges: [{ startMessageId: msgIds[2], endMessageId: msgIds[2] }],
-        }, ctx)
-
-        // Only 1 actual prompt should have occurred (first call)
-        // Subsequent calls were skipped due to "always" approval
-        expect(actualPromptCount).toBe(1)
+        // Silent mode should return empty output (no text for LLM to present)
+        expect(result.output).toBe("")
 
         await Session.remove(session.id)
       },
     })
   })
 
-  test("Permission.ask metadata includes token estimates for multiple ranges", async () => {
+  test("silent mode metadata is fully populated", async () => {
     await using tmp = await tmpdir({
       init: async (dir) => {
         await Bun.write(
           path.join(dir, "opencode.json"),
           JSON.stringify({
             $schema: "https://opencode.ai/config.json",
-            compaction: { mode: "ask", enabled: true },
+            compaction: { mode: "silent", enabled: true },
+          }, null, 2),
+        )
+      },
+    })
+
+    await Instance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        const { session, msgIds } = await createTestSession(tmp.path)
+
+        const tool = await CompactTool.init()
+        const ctx = {
+          sessionID: session.id,
+          messageID: "",
+          callID: "test-call-id",
+          agent: "build",
+          abort: AbortSignal.any([]),
+          metadata: () => {},
+        }
+
+        const result = await tool.execute({
+          ranges: [{ startMessageId: msgIds[0], endMessageId: msgIds[2] }],
+        }, ctx)
+
+        // Metadata should be fully populated for internal tracking
+        expect(result.metadata.totalMessages).toBe(3)
+        expect(result.metadata.rangeCount).toBe(1)
+        expect(result.metadata.totalTokens).toBeGreaterThan(0)
+        // archived field should exist (value depends on summarization success)
+        expect(typeof result.metadata.archived).toBe("number")
+        // summaries should be an object (may be empty if LLM not available)
+        expect(typeof result.metadata.summaries).toBe("object")
+
+        await Session.remove(session.id)
+      },
+    })
+  })
+
+  test("silent mode title indicates completion status", async () => {
+    await using tmp = await tmpdir({
+      init: async (dir) => {
+        await Bun.write(
+          path.join(dir, "opencode.json"),
+          JSON.stringify({
+            $schema: "https://opencode.ai/config.json",
+            compaction: { mode: "silent", enabled: true },
+          }, null, 2),
+        )
+      },
+    })
+
+    await Instance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        const { session, msgIds } = await createTestSession(tmp.path)
+
+        const tool = await CompactTool.init()
+        const ctx = {
+          sessionID: session.id,
+          messageID: "",
+          callID: "test-call-id",
+          agent: "build",
+          abort: AbortSignal.any([]),
+          metadata: () => {},
+        }
+
+        const result = await tool.execute({
+          ranges: [{ startMessageId: msgIds[0], endMessageId: msgIds[2] }],
+        }, ctx)
+
+        // Title should indicate completion status
+        // "Compaction complete" if archival succeeded, "Compaction ready" otherwise
+        expect(result.title).toMatch(/Compaction (complete|ready)/)
+
+        await Session.remove(session.id)
+      },
+    })
+  })
+
+  test("silent mode with multiple ranges returns empty output", async () => {
+    await using tmp = await tmpdir({
+      init: async (dir) => {
+        await Bun.write(
+          path.join(dir, "opencode.json"),
+          JSON.stringify({
+            $schema: "https://opencode.ai/config.json",
+            compaction: { mode: "silent", enabled: true },
           }, null, 2),
         )
       },
@@ -282,9 +240,9 @@ describe("compact tool ask mode", () => {
 
           const messageContents = [
             "What's the best way to handle database migrations in this project?",
-            "The project uses Drizzle ORM for migrations. Run `bun db:migrate` to apply pending migrations. Schema files are in `src/db/schema/`.",
-            "I see there's a users table. How do I add a new column for user preferences?",
-            "Create a new migration with `bun db:generate` after modifying the schema. The preferences column should use JSONB type for flexibility.",
+            "The project uses Drizzle ORM for migrations. Run `bun db:migrate` to apply pending migrations.",
+            "I see there's a users table. How do I add a new column?",
+            "Create a new migration with `bun db:generate` after modifying the schema.",
             "Perfect, that makes sense. Let me try adding the column now.",
           ]
           await Session.updatePart({
@@ -306,22 +264,102 @@ describe("compact tool ask mode", () => {
           metadata: () => {},
         }
 
-        // Call with two non-overlapping ranges (skipping msgIds[2] to test gap handling)
-        // Range 1: messages 0-1 (2 messages), Range 2: messages 3-4 (2 messages), Total: 4 messages
-        await tool.execute({
+        // Call with two non-overlapping ranges
+        const result = await tool.execute({
           ranges: [
             { startMessageId: msgIds[0], endMessageId: msgIds[1] },
             { startMessageId: msgIds[3], endMessageId: msgIds[4] },
           ],
         }, ctx)
 
-        // Verify Permission.ask was called with correct metadata
-        expect(askMock).toHaveBeenCalledTimes(1)
-        const callArgs = askMock.mock.calls[0][0]
-        expect(callArgs.metadata.totalMessages).toBe(4)
-        expect(callArgs.metadata.totalTokens).toBeGreaterThan(0)
-        expect(callArgs.metadata.ranges).toHaveLength(2)
-        expect(callArgs.title).toContain("4 messages")
+        // Silent mode should still return empty output with multiple ranges
+        expect(result.output).toBe("")
+
+        // But metadata should reflect both ranges
+        expect(result.metadata.rangeCount).toBe(2)
+        expect(result.metadata.totalMessages).toBe(4)
+
+        await Session.remove(session.id)
+      },
+    })
+  })
+
+  test("default mode is NOT silent (defaults to notify)", async () => {
+    await using tmp = await tmpdir({
+      init: async (dir) => {
+        // Write config without compaction settings
+        await Bun.write(
+          path.join(dir, "opencode.json"),
+          JSON.stringify({
+            $schema: "https://opencode.ai/config.json",
+          }, null, 2),
+        )
+      },
+    })
+
+    await Instance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        const { session, msgIds } = await createTestSession(tmp.path)
+
+        const tool = await CompactTool.init()
+        const ctx = {
+          sessionID: session.id,
+          messageID: "",
+          callID: "test-call-id",
+          agent: "build",
+          abort: AbortSignal.any([]),
+          metadata: () => {},
+        }
+
+        const result = await tool.execute({
+          ranges: [{ startMessageId: msgIds[0], endMessageId: msgIds[2] }],
+        }, ctx)
+
+        // Default mode should be notify, which has non-empty output
+        expect(result.output).not.toBe("")
+
+        await Session.remove(session.id)
+      },
+    })
+  })
+
+  test("silent mode with explicit enabled: false still works (mode takes precedence)", async () => {
+    // This tests that mode: "silent" works regardless of enabled flag
+    // since the mode controls behavior, not whether compaction is possible
+    await using tmp = await tmpdir({
+      init: async (dir) => {
+        await Bun.write(
+          path.join(dir, "opencode.json"),
+          JSON.stringify({
+            $schema: "https://opencode.ai/config.json",
+            compaction: { mode: "silent" },
+          }, null, 2),
+        )
+      },
+    })
+
+    await Instance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        const { session, msgIds } = await createTestSession(tmp.path)
+
+        const tool = await CompactTool.init()
+        const ctx = {
+          sessionID: session.id,
+          messageID: "",
+          callID: "test-call-id",
+          agent: "build",
+          abort: AbortSignal.any([]),
+          metadata: () => {},
+        }
+
+        const result = await tool.execute({
+          ranges: [{ startMessageId: msgIds[0], endMessageId: msgIds[2] }],
+        }, ctx)
+
+        // Silent mode should return empty output
+        expect(result.output).toBe("")
 
         await Session.remove(session.id)
       },

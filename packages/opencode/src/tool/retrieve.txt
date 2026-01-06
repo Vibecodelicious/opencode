@@ -16,6 +16,9 @@ Look for placeholders in the conversation that look like:
 
 The archiveId is the FIRST message ID shown (e.g., "msg_abc123").
 
+Note: "msg_abc123" is a placeholder. Actual message IDs follow the format `msg_[HEX_TIMESTAMP][RANDOM_BASE62]`
+(e.g., `msg_019512a8bc34XyZ9AbCdEf`). See `packages/opencode/src/id/id.ts` for the full ID generation logic.
+
 PARAMETERS:
 {
   "archiveId": "msg_abc123"  // Required: the first message ID from the placeholder

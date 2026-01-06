@@ -809,6 +809,15 @@ export const CompactTool = Tool.define("compact", {
 
     // SILENT MODE: Return minimal output - user configured to not see compaction details
     if (compactionMode === "silent") {
+      log.info("silent mode: compaction completed", {
+        sessionID: ctx.sessionID,
+        rangeCount: normalized.length,
+        totalMessages,
+        totalTokens,
+        archived: archivalResult.archivedCount,
+        ...(archivalResult.skippedCount > 0 && { skipped: archivalResult.skippedCount }),
+        ...(summarizationError && { error: summarizationError }),
+      })
       return {
         title: archived ? "Compaction complete" : "Compaction ready",
         output: "", // Silent mode: no output text for LLM to present
@@ -850,9 +859,18 @@ export const CompactTool = Tool.define("compact", {
       ? `Archived ${archivalResult.archivedCount} messages (~${totalTokens.toLocaleString()} tokens) across ${summaryCount} range(s).`
       : `${totalMessages} messages (~${totalTokens.toLocaleString()} tokens) ready for archival.`
 
+    // Build retrieval hint with anchor IDs for each successfully archived range
+    const archivedRangeIds = validatedRanges
+      .filter((r) => summaries[r.range.startMessageId])
+      .map((r) => r.range.startMessageId)
+    const retrievalHint =
+      archived && archivedRangeIds.length > 0
+        ? `\n\nTo restore archived content, use the retrieve tool with archiveId: ${archivedRangeIds.map((id) => `"${id}"`).join(", ")}.`
+        : ""
+
     return {
       title,
-      output: `Generated summaries for ${normalized.length} range(s) (${summaryCount}/${normalized.length} successful):\n\n${rangeDetails}\n\nTotal: ${statusText}${errorNote}${archivalNote}${skippedNote}`,
+      output: `Generated summaries for ${normalized.length} range(s) (${summaryCount}/${normalized.length} successful):\n\n${rangeDetails}\n\nTotal: ${statusText}${retrievalHint}${errorNote}${archivalNote}${skippedNote}`,
       metadata: {
         rangeCount: normalized.length,
         totalMessages,

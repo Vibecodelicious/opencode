@@ -124,6 +124,32 @@ The user can configure compaction mode in their settings. Respect the configured
    - Do not report or explain in your response
    - User sees only the [SMART_ARCHIVED] placeholder in history
 
+**SILENT MODE BEHAVIOR:**
+When the user's compaction mode is "silent", compaction is invisible to the user:
+- No permission dialog - compaction executes directly
+- Tool returns empty output - DO NOT mention the compaction in your response
+- Continue with your response as if compaction didn't happen
+- The user will only notice via [SMART_ARCHIVED] placeholders if they scroll back
+
+**Critical: Do NOT mention silent compaction**
+- Do NOT say "I've archived..." or "I compacted..."
+- Do NOT mention token savings or what was archived
+- Simply continue with your main response to the user's question
+
+**Example correct silent mode response:**
+User: "Can you explain how the auth middleware works?"
+[Silent compaction happens internally]
+Assistant: "The auth middleware validates JWT tokens by..." (no mention of compaction)
+
+**Example WRONG silent mode response:**
+User: "Can you explain how the auth middleware works?"
+[Silent compaction happens internally]
+Assistant: "I've quietly archived some earlier content. The auth middleware validates..." (WRONG - mentioned compaction)
+
+**Edge case - errors in silent mode:**
+If compaction fails silently, log the error but do NOT mention it to the user.
+The metadata will contain error information for debugging.
+
 **For ask/notify modes, explain your reasoning:**
 Include in your explanation:
 - Current context utilization level (from context gauge)
@@ -143,10 +169,33 @@ When the user's compaction mode is "ask", the tool uses the native permission sy
 compact operations within the current session only. The approval does not persist across sessions.
 Starting a new session will prompt for permission again on first compact call.
 
+**NOTIFY MODE BEHAVIOR:**
+When the user's compaction mode is "notify" (the default), compaction proceeds immediately:
+- No permission dialog - compaction executes directly
+- After completion, incorporate the notification naturally into your response
+- Don't make compaction the focus - mention it briefly before/after your main content
+- Include what was archived and the summary so user understands what's preserved
+- The tool result includes retrieval hints with archive IDs for future use
+
+**Example good notify response:**
+"I've archived our earlier debugging discussion (~3,500 tokens) - the summary captures the key findings about the middleware ordering issue. Now, regarding your question about the API endpoints..."
+
+**Example of what to avoid:**
+Simply dumping the raw tool output without context or making compaction the primary focus of your response when the user asked about something else.
+
+**Key points for notify mode:**
+- The conversation should flow naturally - compaction is housekeeping, not the main event
+- Users are informed but not interrupted
+- Always mention how to retrieve if needed (the tool provides archive IDs)
+- Do NOT ask the user to confirm or respond to the compaction notification - continue with your main response immediately
+
 HOW TO IDENTIFY MESSAGE RANGES:
 1. **Direct IDs**: User provides specific message IDs (e.g., "compact msg_abc to msg_xyz")
 2. **Topic-based**: Identify messages discussing the topic user mentions, determine first and last message IDs in that discussion
 3. **Positional**: "before this" means messages prior to current exchange; "first half" means early messages
+
+Note: "msg_abc" is a placeholder. Actual message IDs follow the format `msg_[HEX_TIMESTAMP][RANDOM_BASE62]`
+(e.g., `msg_019512a8bc34XyZ9AbCdEf`). See `packages/opencode/src/id/id.ts` for the full ID generation logic.
 
 PARAMETERS:
 {
