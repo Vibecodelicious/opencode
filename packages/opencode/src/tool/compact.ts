@@ -708,6 +708,17 @@ export const CompactTool = Tool.define("compact", {
     const config = await Config.get()
     const compactionMode: "ask" | "notify" | "silent" = config.compaction?.mode ?? "notify"
 
+    // Calculate totals once - used by ask mode, silent mode, and output building
+    const totalMessages = validatedRanges.reduce((sum, r) => sum + r.messages.length, 0)
+    const totalTokens = validatedRanges.reduce((sum, r) => sum + r.tokenEstimate, 0)
+
+    // Build range descriptions once - used by ask mode permission dialog and output
+    const rangeDescriptions = validatedRanges
+      .map((r) => {
+        return `${r.range.startMessageId} to ${r.range.endMessageId}: ${r.messages.length} msg, ~${r.tokenEstimate.toLocaleString()} tokens`
+      })
+      .join("; ")
+
     // ASK MODE: Use Permission system to request user approval via native TUI
     // Permission metadata structure for compact tool:
     // - ranges: Original range parameters from tool call
@@ -715,15 +726,6 @@ export const CompactTool = Tool.define("compact", {
     // - totalTokens: Estimated token count for all messages in ranges
     // - rangeDescriptions: Human-readable summary of each range (IDs, count, tokens)
     if (compactionMode === "ask") {
-      // Use pre-calculated token estimates for the permission request
-      const totalMessages = validatedRanges.reduce((sum, r) => sum + r.messages.length, 0)
-      const totalTokens = validatedRanges.reduce((sum, r) => sum + r.tokenEstimate, 0)
-      const rangeDescriptions = validatedRanges
-        .map((r) => {
-          return `${r.range.startMessageId} to ${r.range.endMessageId}: ${r.messages.length} msg, ~${r.tokenEstimate.toLocaleString()} tokens`
-        })
-        .join("; ")
-
       log.info("ask mode: requesting permission", {
         sessionID: ctx.sessionID,
         rangeCount: normalized.length,
@@ -731,28 +733,40 @@ export const CompactTool = Tool.define("compact", {
         totalTokens,
       })
 
-      // Request permission via native TUI dialog
-      // Throws Permission.RejectedError if user declines
-      await Permission.ask({
-        type: "compact",
-        sessionID: ctx.sessionID,
-        messageID: ctx.messageID,
-        callID: ctx.callID,
-        title: `Archive ${totalMessages} message${totalMessages === 1 ? "" : "s"} (~${totalTokens.toLocaleString()} tokens)`,
-        metadata: {
-          ranges: params.ranges,
+      try {
+        // Request permission via native TUI dialog
+        // Throws Permission.RejectedError if user declines
+        await Permission.ask({
+          type: "compact",
+          sessionID: ctx.sessionID,
+          messageID: ctx.messageID,
+          callID: ctx.callID,
+          title: `Archive ${totalMessages} message${totalMessages === 1 ? "" : "s"} (~${totalTokens.toLocaleString()} tokens)`,
+          metadata: {
+            ranges: params.ranges,
+            totalMessages,
+            totalTokens,
+            rangeDescriptions,
+          },
+        })
+        // If we reach here, permission was granted - continue with compaction
+        log.info("ask mode: permission granted, proceeding with compaction", {
+          sessionID: ctx.sessionID,
+          rangeCount: normalized.length,
           totalMessages,
           totalTokens,
-          rangeDescriptions,
-        },
-      })
-      // If we reach here, permission was granted - continue with compaction
-      log.info("ask mode: permission granted, proceeding with compaction", {
-        sessionID: ctx.sessionID,
-        rangeCount: normalized.length,
-        totalMessages,
-        totalTokens,
-      })
+        })
+      } catch (e) {
+        if (e instanceof Permission.RejectedError) {
+          log.info("ask mode: permission denied, compaction cancelled", {
+            sessionID: ctx.sessionID,
+            rangeCount: normalized.length,
+            totalMessages,
+            totalTokens,
+          })
+        }
+        throw e
+      }
     }
 
     // Get model from session messages and generate summaries
@@ -789,9 +803,7 @@ export const CompactTool = Tool.define("compact", {
       })
     }
 
-    // Build success output with summaries and token estimates (using pre-calculated tokenEstimate)
-    const totalMessages = validatedRanges.reduce((sum, r) => sum + r.messages.length, 0)
-    const totalTokens = validatedRanges.reduce((sum, r) => sum + r.tokenEstimate, 0)
+    // Build success output with summaries (totalMessages/totalTokens already calculated above)
     const summaryCount = Object.keys(summaries).length
     const archived = archivalResult.archivedCount > 0
 

@@ -313,7 +313,12 @@ describe("compact tool ask mode", () => {
     })
   })
 
-  test("skips Permission.ask on second call when 'always' was previously approved", async () => {
+  test("Permission.ask is called for each compact invocation (Permission system manages 'always' state)", async () => {
+    // NOTE: This test verifies that CompactTool calls Permission.ask on every invocation.
+    // The actual "always" approval behavior is managed by the Permission system itself
+    // (see permission/index.ts:162-180), which tracks approved types per session and
+    // short-circuits Permission.ask internally when a type is already approved.
+    // This test uses a mock that simulates that behavior to verify the integration pattern.
     await using tmp = await tmpdir({
       init: async (dir) => {
         await Bun.write(
@@ -331,19 +336,19 @@ describe("compact tool ask mode", () => {
       fn: async () => {
         const { session, msgIds } = await createTestSession(tmp.path)
 
-        // Track which types have been "always" approved
+        // Track which types have been "always" approved (simulating Permission system state)
         const alwaysApproved = new Set<string>()
         let actualPromptCount = 0
 
-        // Mock Permission.ask to simulate "always" behavior:
-        // - First call for a type: count it and mark as "always approved"
-        // - Subsequent calls for same type: return immediately (skip prompt)
+        // Mock Permission.ask to simulate the real Permission system's "always" behavior:
+        // The real system (permission/index.ts:104-106) checks if type is already approved
+        // and returns early. We simulate this to verify CompactTool integrates correctly.
         Permission.ask = mock((input: { type: string }) => {
           if (alwaysApproved.has(input.type)) {
-            // Already approved via "always" - skip prompt
+            // Simulates Permission system's early return for approved types
             return Promise.resolve()
           }
-          // First time seeing this type - count it and approve for future
+          // Simulates first-time prompt that user approves with "always"
           actualPromptCount++
           alwaysApproved.add(input.type)
           return Promise.resolve()
