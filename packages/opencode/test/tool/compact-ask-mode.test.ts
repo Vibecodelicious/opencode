@@ -85,12 +85,10 @@ describe("compact tool ask mode", () => {
   beforeEach(() => {
     originalAsk = Permission.ask
     askMock = mock(() => Promise.resolve())
-    // @ts-expect-error - mocking namespace function
-    Permission.ask = askMock
+    Permission.ask = askMock as typeof Permission.ask
   })
 
   afterEach(() => {
-    // @ts-expect-error - restoring original
     Permission.ask = originalAsk
   })
 
@@ -162,10 +160,9 @@ describe("compact tool ask mode", () => {
         const { session, msgIds } = await createTestSession(tmp.path)
 
         // Make Permission.ask throw RejectedError
-        // @ts-expect-error - mocking
         Permission.ask = mock(() => {
           throw new Permission.RejectedError(session.id, "perm_123", "call_123", {})
-        })
+        }) as typeof Permission.ask
 
         const tool = await CompactTool.init()
         const ctx = {
@@ -229,7 +226,7 @@ describe("compact tool ask mode", () => {
     })
   })
 
-  test("does NOT call Permission.ask in silent mode", async () => {
+  test("does NOT call Permission.ask in silent mode and returns empty output", async () => {
     await using tmp = await tmpdir({
       init: async (dir) => {
         await Bun.write(
@@ -257,12 +254,19 @@ describe("compact tool ask mode", () => {
           metadata: () => {},
         }
 
-        await tool.execute({
+        const result = await tool.execute({
           ranges: [{ startMessageId: msgIds[0], endMessageId: msgIds[2] }],
         }, ctx)
 
         // Permission.ask should NOT have been called in silent mode
         expect(askMock).not.toHaveBeenCalled()
+
+        // Silent mode should return empty output (no text for LLM to present)
+        expect(result.output).toBe("")
+
+        // But metadata should still be populated for internal tracking
+        expect(result.metadata.totalMessages).toBe(3)
+        expect(result.metadata.rangeCount).toBe(1)
 
         await Session.remove(session.id)
       },
@@ -303,6 +307,76 @@ describe("compact tool ask mode", () => {
 
         // Permission.ask should NOT have been called (default is notify)
         expect(askMock).not.toHaveBeenCalled()
+
+        await Session.remove(session.id)
+      },
+    })
+  })
+
+  test("skips Permission.ask on second call when 'always' was previously approved", async () => {
+    await using tmp = await tmpdir({
+      init: async (dir) => {
+        await Bun.write(
+          path.join(dir, "opencode.json"),
+          JSON.stringify({
+            $schema: "https://opencode.ai/config.json",
+            compaction: { mode: "ask", enabled: true },
+          }, null, 2),
+        )
+      },
+    })
+
+    await Instance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        const { session, msgIds } = await createTestSession(tmp.path)
+
+        // Track which types have been "always" approved
+        const alwaysApproved = new Set<string>()
+        let actualPromptCount = 0
+
+        // Mock Permission.ask to simulate "always" behavior:
+        // - First call for a type: count it and mark as "always approved"
+        // - Subsequent calls for same type: return immediately (skip prompt)
+        Permission.ask = mock((input: { type: string }) => {
+          if (alwaysApproved.has(input.type)) {
+            // Already approved via "always" - skip prompt
+            return Promise.resolve()
+          }
+          // First time seeing this type - count it and approve for future
+          actualPromptCount++
+          alwaysApproved.add(input.type)
+          return Promise.resolve()
+        }) as typeof Permission.ask
+
+        const tool = await CompactTool.init()
+        const ctx = {
+          sessionID: session.id,
+          messageID: "",
+          callID: "test-call-id",
+          agent: "build",
+          abort: AbortSignal.any([]),
+          metadata: () => {},
+        }
+
+        // First call - should prompt
+        await tool.execute({
+          ranges: [{ startMessageId: msgIds[0], endMessageId: msgIds[0] }],
+        }, ctx)
+
+        // Second call - should skip prompt due to "always" approval
+        await tool.execute({
+          ranges: [{ startMessageId: msgIds[1], endMessageId: msgIds[1] }],
+        }, ctx)
+
+        // Third call - should also skip prompt
+        await tool.execute({
+          ranges: [{ startMessageId: msgIds[2], endMessageId: msgIds[2] }],
+        }, ctx)
+
+        // Only 1 actual prompt should have occurred (first call)
+        // Subsequent calls were skipped due to "always" approval
+        expect(actualPromptCount).toBe(1)
 
         await Session.remove(session.id)
       },
@@ -384,7 +458,8 @@ describe("compact tool ask mode", () => {
           metadata: () => {},
         }
 
-        // Call with two non-overlapping ranges
+        // Call with two non-overlapping ranges (skipping msgIds[2] to test gap handling)
+        // Range 1: messages 0-1 (2 messages), Range 2: messages 3-4 (2 messages), Total: 4 messages
         await tool.execute({
           ranges: [
             { startMessageId: msgIds[0], endMessageId: msgIds[1] },

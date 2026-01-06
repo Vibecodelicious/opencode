@@ -691,31 +691,36 @@ export const CompactTool = Tool.define("compact", {
     // Load all messages for the session (needed for range collection)
     const allMessages = await Session.messages({ sessionID: ctx.sessionID })
 
-    // Validate each range and collect messages
+    // Validate each range and collect messages (with token estimates calculated once)
     const validatedRanges: Array<{
       range: NormalizedRange
       messages: MessageV2.WithParts[]
+      tokenEstimate: number
     }> = []
 
     for (const range of normalized) {
       const { messages } = await validateSingleRange(ctx.sessionID, range, allMessages)
-      validatedRanges.push({ range, messages })
+      const tokenEstimate = estimateTokensForMessages(messages)
+      validatedRanges.push({ range, messages, tokenEstimate })
     }
 
     // Read compaction mode from config
     const config = await Config.get()
-    const compactionMode = config.compaction?.mode ?? "notify"
+    const compactionMode: "ask" | "notify" | "silent" = config.compaction?.mode ?? "notify"
 
     // ASK MODE: Use Permission system to request user approval via native TUI
+    // Permission metadata structure for compact tool:
+    // - ranges: Original range parameters from tool call
+    // - totalMessages: Count of messages across all ranges
+    // - totalTokens: Estimated token count for all messages in ranges
+    // - rangeDescriptions: Human-readable summary of each range (IDs, count, tokens)
     if (compactionMode === "ask") {
-      // Calculate token estimates for the permission request
+      // Use pre-calculated token estimates for the permission request
       const totalMessages = validatedRanges.reduce((sum, r) => sum + r.messages.length, 0)
-      let totalTokens = 0
+      const totalTokens = validatedRanges.reduce((sum, r) => sum + r.tokenEstimate, 0)
       const rangeDescriptions = validatedRanges
         .map((r) => {
-          const tokenEstimate = estimateTokensForMessages(r.messages)
-          totalTokens += tokenEstimate
-          return `${r.range.startMessageId} to ${r.range.endMessageId}: ${r.messages.length} msg, ~${tokenEstimate.toLocaleString()} tokens`
+          return `${r.range.startMessageId} to ${r.range.endMessageId}: ${r.messages.length} msg, ~${r.tokenEstimate.toLocaleString()} tokens`
         })
         .join("; ")
 
@@ -742,6 +747,12 @@ export const CompactTool = Tool.define("compact", {
         },
       })
       // If we reach here, permission was granted - continue with compaction
+      log.info("ask mode: permission granted, proceeding with compaction", {
+        sessionID: ctx.sessionID,
+        rangeCount: normalized.length,
+        totalMessages,
+        totalTokens,
+      })
     }
 
     // Get model from session messages and generate summaries
@@ -778,23 +789,42 @@ export const CompactTool = Tool.define("compact", {
       })
     }
 
-    // Build success output with summaries and token estimates
+    // Build success output with summaries and token estimates (using pre-calculated tokenEstimate)
     const totalMessages = validatedRanges.reduce((sum, r) => sum + r.messages.length, 0)
-    let totalTokens = 0
+    const totalTokens = validatedRanges.reduce((sum, r) => sum + r.tokenEstimate, 0)
+    const summaryCount = Object.keys(summaries).length
+    const archived = archivalResult.archivedCount > 0
+
+    // SILENT MODE: Return minimal output - user configured to not see compaction details
+    if (compactionMode === "silent") {
+      return {
+        title: archived ? "Compaction complete" : "Compaction ready",
+        output: "", // Silent mode: no output text for LLM to present
+        metadata: {
+          rangeCount: normalized.length,
+          totalMessages,
+          totalTokens,
+          summaries,
+          archived: archivalResult.archivedCount,
+          ...(archivalResult.skippedCount > 0 && { skipped: archivalResult.skippedCount }),
+          ...(archivalResult.errors.length > 0 && { archivalErrors: archivalResult.errors }),
+          ...(summarizationError && { error: summarizationError }),
+        },
+      }
+    }
+
+    // NOTIFY/ASK MODE: Build detailed output for user feedback
     const rangeDetails = validatedRanges
       .map((r) => {
         const s = summaries[r.range.startMessageId]
         const summaryText = s?.summary ?? "No summary generated"
         const indexText = s?.indexTerms?.length ? s.indexTerms.join(", ") : "No index terms"
-        const tokenEstimate = estimateTokensForMessages(r.messages)
-        totalTokens += tokenEstimate
-        return `[${r.range.startMessageId} to ${r.range.endMessageId} (${r.messages.length} message${r.messages.length === 1 ? "" : "s"}, ~${tokenEstimate.toLocaleString()} tokens)]
+        return `[${r.range.startMessageId} to ${r.range.endMessageId} (${r.messages.length} message${r.messages.length === 1 ? "" : "s"}, ~${r.tokenEstimate.toLocaleString()} tokens)]
   Summary: ${summaryText}
   Index: ${indexText}`
       })
       .join("\n\n")
 
-    const summaryCount = Object.keys(summaries).length
     const errorNote = summarizationError ? `\n\nNote: ${summarizationError}` : ""
     const archivalNote =
       archivalResult.errors.length > 0 ? `\n\nArchival issues: ${archivalResult.errors.join("; ")}` : ""
@@ -803,8 +833,6 @@ export const CompactTool = Tool.define("compact", {
         ? `\n\nSkipped ${archivalResult.skippedCount} message(s) already archived by concurrent operation.`
         : ""
 
-    // Determine title and status based on archival outcome
-    const archived = archivalResult.archivedCount > 0
     const title = archived ? "Compaction complete" : "Compaction summaries generated"
     const statusText = archived
       ? `Archived ${archivalResult.archivedCount} messages (~${totalTokens.toLocaleString()} tokens) across ${summaryCount} range(s).`

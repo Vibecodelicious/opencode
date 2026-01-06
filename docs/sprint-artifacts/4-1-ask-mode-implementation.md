@@ -49,31 +49,30 @@ So that I approve every compaction decision.
 ## Tasks / Subtasks
 
 - [x] Task 1 (AC: 1): Add mode detection to CompactTool
-  - [x] Subtask 1.1: Import config reading capability into compact.ts
+  - [x] Subtask 1.1: Import Config and Permission into compact.ts
   - [x] Subtask 1.2: Read `compaction.mode` from config at tool execution start
-  - [x] Subtask 1.3: Add mode parameter to execute context or read from global config
+  - [x] Subtask 1.3: Default to "notify" mode when config not specified
 
-- [x] Task 2 (AC: 2, 5): Implement ask mode behavior
-  - [x] Subtask 2.1: When mode is "ask", return early with a permission request message
-  - [x] Subtask 2.2: Format request to show: range, message count, token estimate
-  - [x] Subtask 2.3: Include reasoning guidance from compact.txt patterns
-  - [x] Subtask 2.4: Tool output should prompt LLM to wait for user response
+- [x] Task 2 (AC: 2, 5): Implement ask mode using Permission system
+  - [x] Subtask 2.1: When mode is "ask", call Permission.ask() before compaction
+  - [x] Subtask 2.2: Permission title shows: message count, token estimate
+  - [x] Subtask 2.3: Permission metadata includes: ranges, rangeDescriptions, totalMessages, totalTokens
 
-- [x] Task 3 (AC: 3, 4): Handle user response
-  - [x] Subtask 3.1: Design the approval flow - LLM re-calls compact tool after approval
-  - [x] Subtask 3.2: Add optional `approved` parameter to skip ask mode on re-call
-  - [x] Subtask 3.3: If rejected, tool returns cancellation confirmation
+- [x] Task 3 (AC: 3, 4): Handle Permission response
+  - [x] Subtask 3.1: If Permission.ask() resolves, continue with compaction
+  - [x] Subtask 3.2: If user declines, Permission.RejectedError is thrown automatically
+  - [x] Subtask 3.3: No special handling needed - Permission system manages approval state
 
 - [x] Task 4: Update compact.txt for ask mode behavior
-  - [x] Subtask 4.1: Add "ASK MODE EXECUTION" section to compact.txt
-  - [x] Subtask 4.2: Explain the two-step flow: request permission → execute after approval
-  - [x] Subtask 4.3: Add examples of permission request format
+  - [x] Subtask 4.1: Add "ASK MODE BEHAVIOR" section to compact.txt
+  - [x] Subtask 4.2: Explain that native Permission dialog is used (consistent with other tools)
+  - [x] Subtask 4.3: Document that no special parameters needed - just call tool normally
 
 - [x] Task 5: Testing
-  - [x] Subtask 5.1: Unit test mode detection from config
-  - [x] Subtask 5.2: Unit test permission request message format
-  - [x] Subtask 5.3: Unit test approval bypass with `approved` parameter
-  - [x] Subtask 5.4: Manual test: LLM correctly requests permission in ask mode
+  - [x] Subtask 5.1: Unit test Permission.ask called when mode is "ask"
+  - [x] Subtask 5.2: Unit test Permission.ask NOT called in notify/silent modes
+  - [x] Subtask 5.3: Unit test RejectedError thrown when user declines
+  - [x] Subtask 5.4: Unit test Permission metadata includes correct token estimates
 
 ## Dev Notes
 
@@ -159,38 +158,38 @@ After code review, the initial two-step LLM-controlled flow was replaced with th
 - Config schema is already complete and working
 - `Config.get()` returns parsed config with defaults
 
-### Files to Modify
+### Files Modified
 
 | File | Change |
 |------|--------|
-| `packages/opencode/src/tool/compact.ts` | Add mode detection, `approved` param, ask mode early return |
-| `packages/opencode/src/tool/compact.txt` | Add "ASK MODE EXECUTION" section with two-step flow guidance |
+| `packages/opencode/src/tool/compact.ts` | Add mode detection, Permission.ask() for ask mode, silent mode early return |
+| `packages/opencode/src/tool/compact.txt` | Add "ASK MODE BEHAVIOR" section explaining native permission dialog |
+| `packages/opencode/test/tool/compact-ask-mode.test.ts` | New test file with 7 unit tests for Permission system integration |
 
 ### Testing Strategy
 
-1. **Unit Tests (compact.test.ts):**
-   - Mock config to return `mode: "ask"`
-   - Verify tool returns permission request (not executing)
-   - Verify `approved: true` bypasses permission request
-   - Verify cancellation message when appropriate
+1. **Unit Tests (compact-ask-mode.test.ts):**
+   - Mock Permission.ask to verify it's called when mode is "ask"
+   - Verify Permission.ask is NOT called in notify/silent modes
+   - Verify RejectedError thrown when user declines
+   - Verify Permission metadata includes correct token estimates
 
 2. **Manual Testing:**
    - Set `compaction.mode: "ask"` in config
    - Trigger autonomous compaction scenario (high context)
-   - Verify LLM presents permission request
-   - Test "yes" → compaction proceeds
-   - Test "no" → compaction cancelled
+   - Verify native Permission dialog appears
+   - Test approve → compaction proceeds
+   - Test reject → compaction cancelled
 
 ## Definition of Done
 
 - [x] CompactTool reads compaction mode from config
-- [x] In "ask" mode, tool returns permission request instead of executing
-- [x] Permission request shows: range, token estimate, reasoning prompt
-- [x] Tool accepts `approved` parameter to proceed after user approval
-- [x] compact.txt updated with ASK MODE EXECUTION section
-- [x] Unit tests for mode detection and approval flow
-- [x] Manual testing confirms LLM correctly implements ask mode behavior
-- [x] All existing tests pass (no regressions)
+- [x] In "ask" mode, tool calls Permission.ask() before executing compaction
+- [x] Permission dialog shows: message count, token estimate, range descriptions
+- [x] Permission rejection throws Permission.RejectedError (cancels compaction)
+- [x] compact.txt updated with ASK MODE BEHAVIOR section
+- [x] Unit tests for Permission.ask integration (7 tests in compact-ask-mode.test.ts)
+- [x] All existing tests pass (no regressions) - 332 tests passing
 
 ## References
 
@@ -240,25 +239,37 @@ Claude Opus 4.5 (claude-opus-4-5-20251101)
 - Updated to explain that native permission dialog is used
 
 **Tests:**
-- Rewrote 6 unit tests in compact-ask-mode.test.ts to test Permission system:
+- Wrote 7 unit tests in compact-ask-mode.test.ts to test Permission system:
   - Permission.ask is called when mode is "ask"
   - RejectedError is thrown when user declines permission
   - Permission.ask is NOT called in notify mode
-  - Permission.ask is NOT called in silent mode
+  - Permission.ask is NOT called in silent mode (also verifies empty output)
   - Default notify mode (no Permission.ask) when no config specified
   - Permission.ask metadata includes correct token estimates for multiple ranges
-- All 331 tests pass with no regressions
+  - Skips Permission.ask on subsequent calls when "always" was previously approved
+- All 332 tests pass with no regressions
+
+**Code Review Follow-up Optimizations:**
+- Optimized token estimation: calculate `tokenEstimate` once per range during validation, reuse throughout
+- Added explicit type annotation `compactionMode: "ask" | "notify" | "silent"` for clarity
+- Added logging after permission granted for better observability
+- Moved silent mode handling earlier for cleaner code flow
+- Improved test message content with realistic authentication/OAuth examples
+- Extended silent mode test to verify empty output string
 
 ### File List
 
-- packages/opencode/src/tool/compact.ts (modified - added Config and Permission imports, ask mode uses Permission.ask())
+- packages/opencode/src/tool/compact.ts (modified - added Config and Permission imports, ask mode uses Permission.ask(), inline metadata docs)
 - packages/opencode/src/tool/compact.txt (modified - added ASK MODE BEHAVIOR section explaining native permission dialog)
-- packages/opencode/test/tool/compact-ask-mode.test.ts (new - 6 unit tests for Permission system integration)
+- packages/opencode/test/tool/compact-ask-mode.test.ts (new - 7 unit tests for Permission system integration)
+- docs/sprint-artifacts/sprint-status.yaml (modified - marked story 4.1 as done)
 
 ### Change Log
 
 - 2026-01-05: Implemented ask mode for CompactTool - adds permission request flow when compaction.mode is "ask"
 - 2026-01-05: Code review fix - rewrote to use native Permission system instead of LLM-controlled two-step flow
+- 2026-01-05: Code review follow-up - optimized token estimation (calculate once per range, reuse), added explicit type annotation, added permission granted logging, improved test message content with realistic examples, added silent mode empty output test
+- 2026-01-05: Code review final - added test for "always" permission behavior, added inline documentation for Permission metadata structure
 
 ---
 

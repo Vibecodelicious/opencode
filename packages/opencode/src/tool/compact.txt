@@ -109,9 +109,10 @@ Each range gets its own summary and index terms for targeted retrieval.
 **COMPACTION MODES:**
 The user can configure compaction mode in their settings. Respect the configured mode:
 
-1. **"ask" mode:** Before compacting autonomously, explain what you want to compact and WHY, then wait for user approval before proceeding.
-   - Present: content identified, expected savings, reasoning
-   - Wait for explicit "yes" / approval before calling the tool
+1. **"ask" mode:** When you call the compact tool, a native permission dialog appears for user approval.
+   - The dialog shows: message ranges, count, and token estimates
+   - User can approve once, approve always (skip future prompts), or reject
+   - If rejected, compaction is cancelled - you may try again with different ranges
 
 2. **"notify" mode (default):** Compact when appropriate, then explain what you did in your response.
    - Proceed with compaction
