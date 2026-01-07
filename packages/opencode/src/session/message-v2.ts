@@ -579,12 +579,46 @@ export namespace MessageV2 {
     throw new Error("unknown message type")
   }
 
+  /** Prefix text with message ID for LLM context visibility */
+  function prefixWithId(id: string, text: string): string {
+    return `[${id}] ${text}`
+  }
+
+  /**
+   * Options for controlling toModelMessage behavior
+   */
+  export interface ToModelMessageOptions {
+    /**
+     * When true, prefixes message content with `[msg_xxx]` IDs for LLM visibility.
+     * This is used during compaction mode so the LLM can reference specific messages
+     * by ID when generating summaries.
+     *
+     * When false (default), message IDs are hidden from the LLM to prevent the model
+     * from learning and hallucinating the `[msg_xxx]` pattern during normal conversation.
+     *
+     * @default false
+     */
+    compactionModeEnabled?: boolean
+  }
+
+  /**
+   * Converts internal message format to model-compatible format for LLM API calls.
+   *
+   * @param input - Array of messages with their parts
+   * @param options - Configuration options
+   * @param options.compactionModeEnabled - When true, prefixes content with message IDs.
+   *   Defaults to false (IDs hidden) to prevent LLM from learning the ID pattern.
+   *   Archive placeholders always retain their IDs regardless of this setting.
+   * @returns Array of ModelMessage objects suitable for LLM API calls
+   */
   export function toModelMessage(
     input: {
       info: Info
       parts: Part[]
     }[],
+    options?: ToModelMessageOptions,
   ): ModelMessage[] {
+    const compactionModeEnabled = options?.compactionModeEnabled ?? false
     const result: UIMessage[] = []
 
     // Build a set of valid archive anchors for orphan detection
@@ -648,7 +682,7 @@ export namespace MessageV2 {
           if (part.type === "text" && !part.ignored)
             userMessage.parts.push({
               type: "text",
-              text: part.text,
+              text: compactionModeEnabled ? prefixWithId(msg.info.id, part.text) : part.text,
             })
           // text/plain and directory files are converted into text parts, ignore them
           if (part.type === "file" && part.mime !== "text/plain" && part.mime !== "application/x-directory")
@@ -660,15 +694,17 @@ export namespace MessageV2 {
             })
 
           if (part.type === "compaction") {
+            const text = "What did we do so far?"
             userMessage.parts.push({
               type: "text",
-              text: "What did we do so far?",
+              text: compactionModeEnabled ? prefixWithId(msg.info.id, text) : text,
             })
           }
           if (part.type === "subtask") {
+            const text = "The following tool was executed by the user"
             userMessage.parts.push({
               type: "text",
-              text: "The following tool was executed by the user",
+              text: compactionModeEnabled ? prefixWithId(msg.info.id, text) : text,
             })
           }
         }
@@ -685,7 +721,7 @@ export namespace MessageV2 {
           if (part.type === "text")
             assistantMessage.parts.push({
               type: "text",
-              text: part.text,
+              text: compactionModeEnabled ? prefixWithId(msg.info.id, part.text) : part.text,
               providerMetadata: part.metadata,
             })
           if (part.type === "step-start")
@@ -695,13 +731,14 @@ export namespace MessageV2 {
           if (part.type === "tool") {
             if (part.state.status === "completed") {
               if (part.state.attachments?.length) {
+                const attachmentText = `Tool ${part.tool} returned an attachment:`
                 result.push({
                   id: Identifier.ascending("message"),
                   role: "user",
                   parts: [
                     {
                       type: "text",
-                      text: `Tool ${part.tool} returned an attachment:`,
+                      text: compactionModeEnabled ? prefixWithId(msg.info.id, attachmentText) : attachmentText,
                     },
                     ...part.state.attachments.map((attachment) => ({
                       type: "file" as const,
@@ -734,14 +771,15 @@ export namespace MessageV2 {
           if (part.type === "reasoning") {
             assistantMessage.parts.push({
               type: "reasoning",
-              text: part.text,
+              text: compactionModeEnabled ? prefixWithId(msg.info.id, part.text) : part.text,
               providerMetadata: part.metadata,
             })
           }
           if (part.type === "context-gauge") {
+            const gaugeText = `[CONTEXT GAUGE: ${part.tokenCount.toLocaleString()} / ${part.contextLimit.toLocaleString()} tokens (${part.percentage}%)]`
             assistantMessage.parts.push({
               type: "text",
-              text: `[CONTEXT GAUGE: ${part.tokenCount.toLocaleString()} / ${part.contextLimit.toLocaleString()} tokens (${part.percentage}%)]`,
+              text: compactionModeEnabled ? prefixWithId(msg.info.id, gaugeText) : gaugeText,
             })
           }
         }
