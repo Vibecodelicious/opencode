@@ -1091,26 +1091,31 @@ So that future changes don't reintroduce the ID leak bug or break two-phase comp
 
 ---
 
-### Story 5.5: Display Message IDs in TUI for User Debugging (Toggleable)
-
-> ⚠️ **STATUS: REQUIRES PM DISCUSSION** - Implementation exists but story details need refinement before formal acceptance.
+### Story 5.5: Display Message IDs in TUI for User Reference
 
 As a user,
-I want to optionally see message IDs (`[msg_xxx]`) displayed in the TUI interface,
-so that I can reference specific messages when debugging, reporting issues, or discussing conversation history.
+I want to see message IDs displayed in the TUI conversation view,
+so that I can reference specific messages when compacting, debugging, or discussing conversation history.
 
-**Known Requirements:**
-- Feature should be toggleable (not always-on)
-- IDs currently display in muted text styling
+**Acceptance Criteria:**
 
-**Open Questions for PM:**
-- [ ] What should the default state be? (visible or hidden)
-- [ ] How should users toggle this? (command palette, keybind, config setting?)
-- [ ] Should this be a persistent preference or session-only?
-- [ ] Are there specific use cases we should optimize for? (debugging, issue reporting, etc.)
+**Given** a user message in the TUI
+**When** the message is displayed
+**Then** the message ID appears in the username/timestamp line, right-aligned
+**And** the ID is shown without brackets (e.g., `msg_abc123` not `[msg_xxx]`)
 
-**Current Implementation (ad-hoc, needs formalization):**
-- `packages/opencode/src/cli/cmd/tui/routes/session/index.tsx` - UserMessage and AssistantMessage components
+**Given** an assistant message in the TUI
+**When** the message is displayed
+**Then** the message ID appears below the response content, right-aligned
+**And** shown for ALL assistant messages (not just last/final)
+
+**Technical Notes:**
+- Location: `packages/opencode/src/cli/cmd/tui/routes/session/index.tsx`
+- Use `flexDirection="row"` with `justifyContent="space-between"` for right-alignment
+- Message IDs inherit muted text styling from the metadata line
+- Always visible by default (no toggle for MVP)
+
+**Future Enhancement:** Consider adding keybinding to toggle ID visibility
 
 **Prerequisites:** None (can be worked independently)
 
