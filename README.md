@@ -1,3 +1,13 @@
+
+### This is a fork of the official OpenCode repository
+
+The standard readme follows, and at the end is a draft blog post describing what
+this branch is about.
+
+---
+
+
+
 <p align="center">
   <a href="https://opencode.ai">
     <picture>
@@ -99,3 +109,155 @@ The other confusingly named repo has no relation to this one. You can [read the 
 ---
 
 **Join our community** [Discord](https://discord.gg/opencode) | [X.com](https://x.com/opencode)
+
+
+
+---
+
+### Draft Blog Post
+
+
+
+# Addressing Context Window Issues in Long-Running AI Sessions
+
+**An experimental approach to selective context management in OpenCode**
+
+---
+
+## The Problems That Kill Long Sessions
+
+Anyone who's worked with AI coding assistants for extended periods has experienced the frustration: the AI that was helpful an hour ago is now giving nonsensical suggestions, forgetting constraints you established, or confidently building on its own hallucinations.
+
+There are several distinct phenomena at play here.
+
+### Context Rot
+
+[Research from Chroma](https://research.trychroma.com/context-rot) documents what they call "context rot" - the degradation of LLM performance as input length increases, even within the model's stated context window.
+
+Models don't process context uniformly. There's a well-documented ["Lost in the Middle"](https://www.understandingai.org/p/context-rot-the-emerging-challenge) effect: LLMs attend well to content at the beginning and end of their context, but struggle with information buried in the middle. As your session grows, important details get lost in an expanding sea of tokens.
+
+More context doesn't mean better understanding. It often means more hallucinations, less reliable outputs, and degraded performance - even when you're technically within the model's limits.
+
+### Context Poisoning
+
+[Roo Code's documentation](https://docs.roocode.com/advanced-usage/context-poisoning) describes a related but distinct problem: context poisoning occurs when inaccurate or irrelevant data contaminates the active context, causing the AI to draw false conclusions and progressively drift from the task.
+
+This happens through:
+- **Accumulated hallucinations** - the model generates something false, then treats it as fact in subsequent responses
+- **Failed attempts that linger** - that debugging tangent that went nowhere is still influencing the model's thinking
+- **Misleading tool outputs** - an error message or outdated file content that's no longer relevant but still present
+
+The symptoms are familiar: suggestions become repetitive or nonsensical, tool calls stop matching your requests, the model seems to be solving a different problem than the one you asked about.
+
+The current recommended solution? Start a new session. Treat the poisoned conversation as disposable.
+
+### Catastrophic Compaction
+
+There's a third issue that compounds the first two: what happens when you actually hit the context limit.
+
+Most tools handle this with batch compaction - when the window fills up, they generate a summary paragraph (typically hidden from the user) and show something like `[session compacted]`. The problem is that these summaries often lose critical nuance:
+
+- Architectural constraints get flattened into generic descriptions
+- The specific reasoning behind decisions disappears
+- You're left with a summary the AI wrote about its own conversation - and you can't see what was lost
+
+This is often *worse* than starting fresh. At least with a new session, you know you need to re-establish context. With batch compaction, you might not realize that critical constraints vanished until the AI contradicts them.
+
+---
+
+## What If You Could Stay Ahead of It?
+
+I've been experimenting with an alternative approach: selective context compaction with retrieval.
+
+The core idea: if you can surgically archive stale or problematic content *before* hitting the limit, you never trigger the destructive batch compaction. You maintain a lean, healthy context throughout the session.
+
+### How It Works
+
+**Context Gauges as Compaction Triggers**
+
+The system injects periodic checkpoints showing token utilization:
+
+```
+[CONTEXT GAUGE: 67,000 / 100,000 tokens (67%)]
+```
+
+These aren't just for your information - they're signals to the AI. When the model sees utilization climbing, it's prompted to look for compaction opportunities: verbose tool outputs that have been analyzed, completed debugging tangents, discussions that are no longer relevant to the current task.
+
+The frequency ramps up as context fills: sparse checkpoints early on, more frequent as you approach capacity. The goal is to trigger proactive cleanup before you ever hit the wall.
+
+**Selective Archiving**
+
+You (or the AI) can archive specific message ranges:
+
+```
+"Archive the failed debugging attempts from earlier"
+"Compact messages msg_abc to msg_xyz"
+```
+
+The archived content is replaced with a compact placeholder:
+
+```
+[SMART_ARCHIVED: msg_abc to msg_xyz]
+Summary: Debugging attempts - tried token refresh (tokens valid),
+         session storage (persisting). Root cause was middleware order.
+Index: auth, debugging, middleware, session
+```
+
+The original content isn't deleted - it's stored with a summary and index terms, retrievable if needed later.
+
+**Retrieval**
+
+If archived content becomes relevant again:
+
+```
+retrieve({ archiveId: "msg_abc" })
+```
+
+The original content is restored to the conversation.
+
+**User Control**
+
+Three modes for AI autonomy:
+- **ask**: AI requests permission before archiving
+- **notify**: AI archives and reports what it did
+- **silent**: AI handles it automatically
+
+---
+
+## What This Might Help With
+
+**For context rot:** By archiving verbose or stale content, you keep the active context leaner. Information you're actively using stays in the "attention-friendly" zones rather than getting buried in the middle of a massive context.
+
+**For context poisoning:** Instead of nuking the whole session when things go wrong, you can archive the contaminated portions - the hallucinated outputs, the failed experiments, the misleading tangents - while preserving the legitimate decisions and constraints you've established.
+
+**For catastrophic compaction:** The hope is that by staying ahead of context limits through continuous, surgical archiving, you never trigger the old batch compaction at all. Keep the context healthy and lean enough that the destructive fallback never fires.
+
+**For the "start over" problem:** The goal is to make sessions recoverable rather than disposable. Archive the bad parts, keep the good parts, retrieve if you archived too aggressively.
+
+---
+
+## Current Status and Caveats
+
+This is early and experimental. I've implemented the core mechanics:
+- Context gauge injection with ramping frequency
+- Compact tool with summary generation
+- Retrieve tool
+- Placeholder rendering
+- User control modes
+
+What I don't know yet:
+- Does this actually help maintain coherence in practice?
+- Are the generated summaries good enough for useful retrieval?
+- Will the AI make good autonomous decisions about what to archive?
+- How aggressive should compaction be to stay ahead of the limit?
+
+I'll be using this myself and learning as I go. If you're curious, the feature is available in [OpenCode branch/version/etc]. Give it a spin on a long session and let me know how it goes - I'm especially interested in whether the AI makes sensible autonomous archiving decisions and whether the summaries are actually useful for retrieval.
+
+---
+
+## References
+
+- [Context Rot: How Increasing Input Tokens Impacts LLM Performance | Chroma Research](https://research.trychroma.com/context-rot)
+- [Context rot: the emerging challenge | Understanding AI](https://www.understandingai.org/p/context-rot-the-emerging-challenge)
+- [Context Poisoning | Roo Code Documentation](https://docs.roocode.com/advanced-usage/context-poisoning)
+- [Effective context engineering for AI agents | Anthropic](https://www.anthropic.com/engineering/effective-context-engineering-for-ai-agents)
