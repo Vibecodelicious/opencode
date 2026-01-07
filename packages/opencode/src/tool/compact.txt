@@ -1,5 +1,28 @@
 Archive message ranges with intelligent summaries for context management.
 
+**TWO-PHASE COMPACTION FLOW**
+
+IMPORTANT: Message IDs are NOT visible by default. You cannot see [msg_xxx] prefixes on messages during normal conversation. The two-phase flow enables ID visibility:
+
+**Phase 1 - Prepare Mode (enable ID visibility):**
+Call compact with NO ranges to enable message ID visibility:
+```json
+{ "ranges": [] }
+```
+This enables ID prefixes on all messages so you can see them in the next response.
+
+**Phase 2 - Execute Mode (perform actual compaction):**
+After seeing the message IDs, call compact with specific ranges:
+```json
+{
+  "ranges": [
+    { "startMessageId": "msg_xxx", "endMessageId": "msg_yyy" }
+  ]
+}
+```
+
+CRITICAL: Do NOT generate or guess message IDs. Only use IDs you can actually see prefixed on messages AFTER calling prepare mode. If you reference IDs that don't exist, the compaction will fail.
+
 This tool compacts message ranges by:
 1. Generating a concise summary (1-3 sentences) of the content
 2. Extracting 3-7 semantic index terms for future retrieval
@@ -199,11 +222,14 @@ Note: "msg_abc" is a placeholder. Actual message IDs follow the format `msg_[HEX
 
 PARAMETERS:
 {
-  "ranges": [{
-    "startMessageId": "msg_abc",       // Required: first message ID
-    "endMessageId": "msg_xyz"          // Optional: last message ID (defaults to start for single message)
+  "ranges": [{                          // Optional: omit or pass empty array for prepare mode
+    "startMessageId": "msg_abc",        // Required within range: first message ID
+    "endMessageId": "msg_xyz"           // Optional: last message ID (defaults to start for single message)
   }]
 }
+
+**Prepare Mode (Phase 1):** Omit ranges or pass empty array `[]` to enable message ID visibility.
+**Execute Mode (Phase 2):** Pass one or more ranges to perform actual compaction.
 
 Multiple ranges can be archived in a single call.
 

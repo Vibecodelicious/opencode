@@ -49,6 +49,7 @@ import { SessionProcessor } from "./processor"
 import { TaskTool } from "@/tool/task"
 import { SessionStatus } from "./status"
 import { Config } from "../config/config"
+import { CompactionModeState } from "./compaction-mode-state"
 
 // @ts-ignore
 globalThis.AI_SDK_LOG_WARNINGS = false
@@ -714,6 +715,7 @@ export namespace SessionPrompt {
 
                 return false
               }),
+              { compactionModeEnabled: CompactionModeState.get(sessionID) },
             ),
           ],
           tools: model.info.tool_call === false ? undefined : tools,

@@ -13,6 +13,7 @@ import { mergeDeep, pipe } from "remeda"
 import { Storage } from "../storage/storage"
 import { Config } from "../config/config"
 import { Permission } from "../permission"
+import { CompactionModeState } from "../session/compaction-mode-state"
 
 const log = Log.create({ service: "tool.compact" })
 
@@ -24,9 +25,43 @@ const RangeSchema = z.object({
 const Parameters = z.object({
   ranges: z
     .array(RangeSchema)
-    .nonempty("ranges must include at least one range")
-    .describe("Message ranges to consider for compaction preparation"),
+    .optional()
+    .describe(
+      "Message ranges to compact. If omitted or empty, enters 'prepare mode' which enables message ID visibility so you can identify ranges. Call again with specific ranges after seeing the IDs.",
+    ),
 })
+
+/**
+ * Response text shown to the LLM when entering prepare mode.
+ * Explains that message IDs are now visible and how to proceed.
+ */
+export const PREPARE_MODE_RESPONSE = `Message IDs are now visible in the conversation (e.g., [msg_abc123]).
+
+IMPORTANT: Do NOT mimic or generate message IDs in your responses. These IDs are
+injected by the system and correspond to real stored messages. Only reference IDs
+you can see prefixed on actual messages.
+
+Call compact again with specific message ID ranges to archive content.
+
+Example:
+{
+  "ranges": [
+    { "startMessageId": "msg_xxx", "endMessageId": "msg_yyy" }
+  ]
+}`
+
+/**
+ * Checks if the compact tool was called in "prepare mode" (no ranges specified).
+ * Prepare mode enables message ID visibility so the LLM can see IDs before compacting.
+ *
+ * @param ranges - The ranges parameter from the tool call
+ * @returns true if this is a prepare mode call (undefined or empty array)
+ */
+export function isPrepareMode(
+  ranges: Array<{ startMessageId: string; endMessageId?: string }> | undefined,
+): boolean {
+  return !ranges || ranges.length === 0
+}
 
 /**
  * A normalized message range with both start and end message IDs.
@@ -683,7 +718,19 @@ export const CompactTool = Tool.define("compact", {
   description: DESCRIPTION,
   parameters: Parameters,
   async execute(params, ctx) {
-    const normalized = normalizeRanges(params.ranges)
+    // PREPARE MODE: If no ranges specified, enable message ID visibility
+    if (isPrepareMode(params.ranges)) {
+      log.info("prepare mode: enabling message ID visibility", { sessionID: ctx.sessionID })
+      CompactionModeState.set(ctx.sessionID, true)
+      return {
+        title: "Prepare mode enabled",
+        output: PREPARE_MODE_RESPONSE,
+        metadata: {},
+      }
+    }
+
+    // EXECUTE MODE: Process actual compaction with specified ranges
+    const normalized = normalizeRanges(params.ranges!)
 
     // Check for overlaps first (cheaper than message lookups)
     validateNoOverlaps(normalized)
@@ -802,6 +849,16 @@ export const CompactTool = Tool.define("compact", {
         summaries,
       })
     }
+
+    // Reset compactionModeEnabled flag after execute mode completes
+    // This ensures message IDs are hidden again in subsequent context rebuilds
+    // We reset regardless of archival outcome - the user has "used" prepare mode
+    // by calling with ranges, so the two-phase flow is complete
+    log.info("resetting compaction mode after execute phase", {
+      sessionID: ctx.sessionID,
+      archivedCount: archivalResult.archivedCount,
+    })
+    CompactionModeState.set(ctx.sessionID, false)
 
     // Build success output with summaries (totalMessages/totalTokens already calculated above)
     const summaryCount = Object.keys(summaries).length

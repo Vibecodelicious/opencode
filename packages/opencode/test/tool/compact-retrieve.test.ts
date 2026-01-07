@@ -1,3 +1,13 @@
+/**
+ * Integration tests for the compact and retrieve tools.
+ *
+ * This file tests both tools together because they form a cohesive pair:
+ * - compact: archives message ranges with summaries
+ * - retrieve: restores archived content by archive ID
+ *
+ * For unit tests specific to prepare mode and CompactionModeState,
+ * see compact-prepare-mode.test.ts
+ */
 import { describe, expect, test } from "bun:test"
 import fs from "fs/promises"
 import path from "path"
@@ -216,16 +226,16 @@ describe("tool.compact and tool.retrieve stubs", () => {
     })
   })
 
-  test("compact validates ranges", async () => {
+  test("compact with empty ranges enters prepare mode", async () => {
     await withSandbox(async ({ Instance, CompactTool }) => {
       await Instance.provide({
         directory: projectRoot,
         fn: async () => {
           const tool = await CompactTool.init()
-          const promise = (async () => {
-            await tool.execute({ ranges: [] }, ctx)
-          })()
-          await expect(promise).rejects.toThrow(/ranges/i)
+          const result = await tool.execute({ ranges: [] }, ctx)
+          // Empty ranges triggers prepare mode instead of error
+          expect(result.title).toBe("Prepare mode enabled")
+          expect(result.output).toContain("Message IDs are now visible")
         },
       })
     })
