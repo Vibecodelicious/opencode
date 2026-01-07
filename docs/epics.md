@@ -1091,9 +1091,34 @@ So that future changes don't reintroduce the ID leak bug or break two-phase comp
 
 ---
 
+### Story 5.5: Display Message IDs in TUI for User Debugging (Toggleable)
+
+> ⚠️ **STATUS: REQUIRES PM DISCUSSION** - Implementation exists but story details need refinement before formal acceptance.
+
+As a user,
+I want to optionally see message IDs (`[msg_xxx]`) displayed in the TUI interface,
+so that I can reference specific messages when debugging, reporting issues, or discussing conversation history.
+
+**Known Requirements:**
+- Feature should be toggleable (not always-on)
+- IDs currently display in muted text styling
+
+**Open Questions for PM:**
+- [ ] What should the default state be? (visible or hidden)
+- [ ] How should users toggle this? (command palette, keybind, config setting?)
+- [ ] Should this be a persistent preference or session-only?
+- [ ] Are there specific use cases we should optimize for? (debugging, issue reporting, etc.)
+
+**Current Implementation (ad-hoc, needs formalization):**
+- `packages/opencode/src/cli/cmd/tui/routes/session/index.tsx` - UserMessage and AssistantMessage components
+
+**Prerequisites:** None (can be worked independently)
+
+---
+
 **Epic 5 Complete**
 
-**Stories Created:** 4
+**Stories Created:** 5
 **FR Coverage:** FR23, FR24
 **Architecture Sections Used:** ID Visibility, Two-Phase Compaction Flow, Message Context Building
 

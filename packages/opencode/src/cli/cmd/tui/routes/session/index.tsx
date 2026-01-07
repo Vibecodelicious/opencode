@@ -1024,7 +1024,10 @@ function UserMessage(props: {
             backgroundColor={hover() ? theme.backgroundElement : theme.backgroundPanel}
             flexShrink={0}
           >
-            <text fg={theme.text}>{text()?.text}</text>
+            <text>
+              <span style={{ fg: theme.textMuted }}>[{props.message.id}] </span>
+              <span style={{ fg: theme.text }}>{text()?.text}</span>
+            </text>
             <Show when={files().length}>
               <box flexDirection="row" paddingBottom={1} paddingTop={1} gap={1} flexWrap="wrap">
                 <For each={files()}>
@@ -1095,6 +1098,9 @@ function AssistantMessage(props: { message: AssistantMessage; parts: Part[]; las
 
   return (
     <>
+      <box paddingLeft={3} marginTop={1}>
+        <text fg={theme.textMuted}>[{props.message.id}]</text>
+      </box>
       <For each={props.parts}>
         {(part, index) => {
           const component = createMemo(() => PART_MAPPING[part.type as keyof typeof PART_MAPPING])
