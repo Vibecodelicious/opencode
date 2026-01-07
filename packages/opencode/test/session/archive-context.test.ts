@@ -3,6 +3,19 @@ import { describe, expect, test } from "bun:test"
 import { toModelMessageWithIDs } from "../../src/session/archive-context"
 import { MessageV2 } from "../../src/session/message-v2"
 
+/**
+ * Tests for toModelMessageWithIDs() - the ID-annotated context builder.
+ *
+ * This function is used ONLY for the compaction summarization LLM call.
+ * It ALWAYS prefixes messages with [msg_xxx] IDs (no flag check).
+ *
+ * Contrast with toModelMessage() in message-v2.ts which:
+ * - Default/compactionModeEnabled:false → NO ID prefixes
+ * - compactionModeEnabled:true → WITH ID prefixes
+ *
+ * The summarization LLM must always see IDs to reference specific messages.
+ */
+
 const baseUser = {
   id: "msg_user",
   sessionID: "ses",
@@ -284,5 +297,118 @@ describe("toModelMessageWithIDs", () => {
     expect(serialized).toContain("error-text")
     expect(serialized).toContain("boom")
     expect(serialized).not.toContain("output-available")
+  })
+})
+
+describe("toModelMessageWithIDs vs toModelMessage differentiation", () => {
+  test("toModelMessageWithIDs ALWAYS prefixes IDs (no flag, no options)", () => {
+    const input: MessageV2.WithParts[] = [
+      {
+        info: baseUser,
+        parts: [
+          {
+            ...basePart,
+            type: "text" as const,
+            text: "Test message",
+          },
+        ],
+      },
+    ]
+
+    // toModelMessageWithIDs has NO options parameter - it ALWAYS prefixes
+    const result = toModelMessageWithIDs(input as any)
+    const serialized = JSON.stringify(result)
+
+    expect(serialized).toContain("[msg_user] Test message")
+  })
+
+  test("toModelMessage with default options does NOT prefix IDs", () => {
+    const input: MessageV2.WithParts[] = [
+      {
+        info: baseUser,
+        parts: [
+          {
+            ...basePart,
+            type: "text" as const,
+            text: "Test message",
+          },
+        ],
+      },
+    ]
+
+    // toModelMessage with no options (or compactionModeEnabled: false) hides IDs
+    const result = MessageV2.toModelMessage(input as any)
+    const serialized = JSON.stringify(result)
+
+    expect(serialized).toContain("Test message")
+    expect(serialized).not.toContain("[msg_user]")
+    expect(serialized).not.toContain("[msg_")
+  })
+
+  test("toModelMessage with compactionModeEnabled:true DOES prefix IDs", () => {
+    const input: MessageV2.WithParts[] = [
+      {
+        info: baseUser,
+        parts: [
+          {
+            ...basePart,
+            type: "text" as const,
+            text: "Test message",
+          },
+        ],
+      },
+    ]
+
+    // toModelMessage with compactionModeEnabled: true prefixes IDs
+    const result = MessageV2.toModelMessage(input as any, { compactionModeEnabled: true })
+    const serialized = JSON.stringify(result)
+
+    expect(serialized).toContain("[msg_user] Test message")
+  })
+
+  test("same input produces different output based on function choice", () => {
+    const input: MessageV2.WithParts[] = [
+      {
+        info: baseUser,
+        parts: [
+          {
+            ...basePart,
+            type: "text" as const,
+            text: "Hello world",
+          },
+        ],
+      },
+      {
+        info: baseAssistant,
+        parts: [
+          {
+            ...basePart,
+            messageID: "msg_assistant",
+            type: "text" as const,
+            text: "Response here",
+          },
+        ],
+      },
+    ]
+
+    // toModelMessageWithIDs: ALWAYS with IDs (for summarization)
+    const withIds = toModelMessageWithIDs(input as any)
+    const withIdsSerialized = JSON.stringify(withIds)
+    expect(withIdsSerialized).toContain("[msg_user] Hello world")
+    expect(withIdsSerialized).toContain("[msg_assistant] Response here")
+
+    // toModelMessage default: NO IDs (for main conversation)
+    const noIds = MessageV2.toModelMessage(input as any)
+    const noIdsSerialized = JSON.stringify(noIds)
+    expect(noIdsSerialized).toContain("Hello world")
+    expect(noIdsSerialized).toContain("Response here")
+    expect(noIdsSerialized).not.toContain("[msg_user]")
+    expect(noIdsSerialized).not.toContain("[msg_assistant]")
+
+    // toModelMessage with flag: WITH IDs (for two-phase compaction)
+    const withFlag = MessageV2.toModelMessage(input as any, { compactionModeEnabled: true })
+    const withFlagSerialized = JSON.stringify(withFlag)
+    expect(withFlagSerialized).toContain("[msg_user] Hello world")
+    expect(withFlagSerialized).toContain("[msg_assistant] Response here")
   })
 })
