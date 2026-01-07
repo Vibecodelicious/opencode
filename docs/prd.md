@@ -454,6 +454,8 @@ Deferred to architecture phase.
 
 - FR1: System assigns unique, stable IDs to all messages (user, LLM, tool)
 - FR2: Message IDs persist when sessions are resumed
+- FR23: Message IDs are hidden from LLM during normal conversation by default
+- FR24: Compact tool can enable message ID visibility via a session flag (two-phase compaction)
 
 ### Context Visibility
 
@@ -510,6 +512,8 @@ Deferred to architecture phase.
 
 The following items were observed during implementation. They are **not** part of this PRD's requirements and are recorded only to guide potential future improvement work:
 
-- Auto ask-mode consent can be inferred from any subsequent user message containing “yes/ok,” even if unrelated, which could trigger unexpected auto compaction (SessionPrompt approval parsing).
+- Auto ask-mode consent can be inferred from any subsequent user message containing "yes/ok," even if unrelated, which could trigger unexpected auto compaction (SessionPrompt approval parsing).
 - CLI flags only disable auto compaction (`--disable-autocompact`) and cannot re-enable it when config sets `compaction.enabled` false, limiting run-level overrides.
 - Tests cover config and environment overrides but do not exercise the CLI override path (`--compaction-mode`, `--disable-autocompact`), leaving that flow unverified.
+- **Compaction summary display**: The compaction summary is currently shown via LLM response text rather than tool output. The tool should display the summary directly to the user for consistent UX.
+- **Message ID placement in TUI**: Message IDs are currently shown at the start of message content. For user messages, the ID should appear next to the username/timestamp metadata line. For assistant messages, a similar metadata line treatment should be added for visual consistency.

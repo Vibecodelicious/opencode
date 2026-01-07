@@ -27,7 +27,7 @@ This document provides the complete epic and story breakdown for Intelligent Con
 ## Context Validation
 
 **Input Documents Loaded:**
-- ✅ PRD (`docs/prd.md`) - 22 Functional Requirements, 8 Non-Functional Requirements
+- ✅ PRD (`docs/prd.md`) - 24 Functional Requirements, 8 Non-Functional Requirements
 - ✅ Architecture (`docs/architecture.md`) - Complete technical decisions
 - ○ UX Design - Not applicable (CLI tool)
 
@@ -91,6 +91,12 @@ This document provides the complete epic and story breakdown for Intelligent Con
 | FR21 | Archived content persists across session resume | MVP |
 | FR22 | Archived content maintains data integrity over time | MVP |
 
+### Message ID Privacy (2 FRs)
+| ID | Requirement | Scope |
+|----|-------------|-------|
+| FR23 | Message IDs are hidden from LLM during normal conversation by default | MVP |
+| FR24 | Compact tool can enable message ID visibility via session flag (two-phase compaction) | MVP |
+
 ### Non-Functional Requirements (8 NFRs)
 | ID | Requirement | Category |
 |----|-------------|----------|
@@ -115,6 +121,7 @@ This document provides the complete epic and story breakdown for Intelligent Con
 | 2 | Smart Compaction | Archive content with intelligent summaries | FR6-13, FR21-22 |
 | 3 | Content Retrieval | Get archived content back when needed | FR14-16 |
 | 4 | Autonomous Behavior Control | Control LLM autonomy level | FR18-20 |
+| 5 | Message ID Privacy | Prevent LLM from hallucinating fake message IDs | FR23 |
 
 ### Technical Context per Epic
 
@@ -137,6 +144,11 @@ This document provides the complete epic and story breakdown for Intelligent Con
 **Epic 4 - Architecture References:**
 - Config extension (Architecture: File Responsibilities - config.ts)
 - Mode-based behavior in tool execution
+
+**Epic 5 - Architecture References:**
+- `toModelMessage()` in `message-v2.ts` (normal conversation context)
+- `toModelMessageWithIDs()` in `archive-context.ts` (compaction-only context)
+- `prefixWithId()` function usage patterns
 
 ---
 
@@ -898,6 +910,195 @@ So that my workflow is completely uninterrupted.
 
 ---
 
+## Epic 5: Message ID Privacy & Two-Phase Compaction
+
+**Goal:** Fix a bug where message IDs are exposed to the LLM during normal conversation, causing the LLM to hallucinate fake message IDs. Implement two-phase compaction so the LLM can still access message IDs when it needs to select compaction targets.
+
+**User Value:** Users can trust that message IDs shown in the UI correspond to real, actionable messages. The LLM no longer generates fake message ID references. Autonomous compaction still works because the LLM can enable ID visibility when needed.
+
+**Bug Report:** During testing, the LLM's responses were found to contain message ID prefixes (e.g., `[msg_b9621c3530011d998346apfpEa]`) that don't correspond to any stored message. When users attempted to compact these IDs, the operation failed with "Message not found". Root cause: `toModelMessage()` was prefixing all messages with `[msg_xxx]` IDs, teaching the LLM the pattern which it then mimicked incorrectly.
+
+**Solution:** Two-phase compaction:
+1. Hide message IDs by default (FR23)
+2. Compact tool can enable ID visibility via session flag (FR24)
+3. When LLM calls compact with no ranges, flag flips, tool responds, context rebuilds with IDs visible
+4. LLM can then call compact again with specific message ID ranges
+
+**FRs Covered:** FR23, FR24
+
+---
+
+### Story 5.1: Conditional ID Prefixing Based on Compaction Mode Flag
+
+As a user,
+I want message IDs to be hidden from the LLM during normal conversation,
+So that the LLM doesn't learn and hallucinate the `[msg_xxx]` pattern.
+
+**Acceptance Criteria:**
+
+**Given** a normal conversation with `compactionModeEnabled: false`
+**When** context is built via `toModelMessage()`
+**Then** message text is NOT prefixed with `[msg_xxx]` IDs
+
+**And** user messages render as: `{ role: "user", content: "Fix the login page" }`
+**And** assistant messages render without ID prefix
+**And** context-gauge parts render without ID prefix
+**And** archived placeholders still show their archive IDs (for retrieval reference)
+
+**Given** compaction mode is enabled with `compactionModeEnabled: true`
+**When** context is built via `toModelMessage()`
+**Then** message text IS prefixed with `[msg_xxx]` IDs (same as current behavior)
+
+**Technical Notes:**
+- Location: `packages/opencode/src/session/message-v2.ts`
+- Add `compactionModeEnabled` flag check to `toModelMessage()`
+- When flag is false: render without ID prefixes
+- When flag is true: render with ID prefixes (current behavior)
+- Keep `toModelMessageWithIDs()` in `archive-context.ts` for summarization LLM call
+- Flag is stored in session state (accessible during context building)
+
+**Prerequisites:** None
+
+---
+
+### Story 5.2: Compact Tool Prepare Mode (Two-Phase Entry Point)
+
+As an LLM,
+I want to call the compact tool with no ranges to enable message ID visibility,
+So that I can see message IDs and then call compact again with specific ranges.
+
+**Acceptance Criteria:**
+
+**Given** the compact tool is called with no ranges (or `mode: "prepare"`)
+**When** the tool executes
+**Then** it sets the session flag: `compactionModeEnabled = true`
+**And** it returns a tool response:
+```
+Message IDs are now visible in the conversation (e.g., [msg_abc123]).
+
+IMPORTANT: Do NOT mimic or generate message IDs in your responses. These IDs are
+injected by the system and correspond to real stored messages. Only reference IDs
+you can see prefixed on actual messages.
+
+Call compact again with specific message ID ranges to archive content.
+```
+
+**And** when the tool response is sent to the LLM:
+- The system rebuilds context for the continuation
+- The flag is now true, so `toModelMessage()` includes ID prefixes
+- The LLM sees all messages with `[msg_xxx]` prefixes
+
+**And** the LLM can then call compact with specific ranges:
+```typescript
+compact({
+  ranges: [
+    { startMessageId: "msg_abc", endMessageId: "msg_xyz" }
+  ]
+})
+```
+
+**Given** compact tool is called with valid ranges
+**When** compaction completes successfully
+**Then** the flag is reset: `compactionModeEnabled = false`
+**And** subsequent context builds hide message IDs again
+
+**Technical Notes:**
+- Location: `packages/opencode/src/tool/compact.ts`
+- Detect "prepare mode" by checking if `ranges` is empty or undefined
+- Flag is stored in session state (must be accessible to `toModelMessage()`)
+- Flag reset happens after successful compaction execution
+- Update tool description (`compact.txt`) to include:
+  - Two-phase flow explanation
+  - "Message IDs are NOT visible by default. Call compact with no ranges first to enable ID visibility."
+  - "Do not generate or guess message IDs - only use IDs visible in the conversation after prepare phase."
+
+**Prerequisites:** Story 5.1
+
+---
+
+### Story 5.3: Verify Compaction Summarization Uses ID-Annotated Context
+
+As a developer,
+I want to verify the compact tool correctly uses `toModelMessageWithIDs()` for summarization,
+So that the summarization LLM can reference message IDs when generating summaries and index terms.
+
+**Acceptance Criteria:**
+
+**Given** the Compact tool executes with valid ranges (phase 2)
+**When** it builds context for the summarization LLM call
+**Then** it uses `toModelMessageWithIDs()` from `archive-context.ts`
+
+**And** the compaction LLM sees messages prefixed with IDs:
+```
+[msg_abc123] Fix the login page
+[msg_def456] Let me read the file first
+```
+
+**And** the compaction LLM can correctly reference these IDs in its response
+**And** all referenced IDs correspond to actual stored messages
+
+**Technical Notes:**
+- Location: `packages/opencode/src/tool/compact.ts`
+- This is a separate LLM call from the main conversation
+- Uses `toModelMessageWithIDs()` (not the flag-based `toModelMessage()`)
+- Verify this still works correctly after Story 5.1 changes
+
+**Prerequisites:** Story 5.2
+
+---
+
+### Story 5.4: Add Integration Tests for Message ID Privacy and Two-Phase Flow
+
+As a developer,
+I want automated tests to prevent regression of message ID visibility behavior,
+So that future changes don't reintroduce the ID leak bug or break two-phase compaction.
+
+**Acceptance Criteria:**
+
+**Test case 1: Default ID hiding**
+**Given** `compactionModeEnabled: false`
+**When** `toModelMessage()` is called
+**Then** no message text contains `[msg_` prefix pattern
+
+**Test case 2: Flag-enabled ID visibility**
+**Given** `compactionModeEnabled: true`
+**When** `toModelMessage()` is called
+**Then** all message text IS prefixed with `[msg_xxx]` pattern
+
+**Test case 3: Summarization context always has IDs**
+**Given** any flag state
+**When** `toModelMessageWithIDs()` is called
+**Then** all message text IS prefixed with `[msg_xxx]` pattern
+
+**Test case 4: Two-phase flow**
+**Given** compact tool is called with no ranges
+**When** tool executes
+**Then** `compactionModeEnabled` flag is set to true
+**And** tool response includes "Message IDs are now visible"
+
+**Test case 5: Flag reset after compaction**
+**Given** compact tool is called with valid ranges and compaction succeeds
+**When** compaction completes
+**Then** `compactionModeEnabled` flag is reset to false
+
+**Technical Notes:**
+- Location: `packages/opencode/src/session/__tests__/` and `packages/opencode/src/tool/__tests__/`
+- Test both context builders with sample messages
+- Test flag state transitions in compact tool
+- Archived placeholder text may contain `msg_` references (for retrieval) - this is expected
+
+**Prerequisites:** Story 5.1, Story 5.2, Story 5.3
+
+---
+
+**Epic 5 Complete**
+
+**Stories Created:** 4
+**FR Coverage:** FR23, FR24
+**Architecture Sections Used:** ID Visibility, Two-Phase Compaction Flow, Message Context Building
+
+---
+
 ## FR Coverage Matrix
 
 | FR | Description | Epic | Story |
@@ -924,6 +1125,8 @@ So that my workflow is completely uninterrupted.
 | FR20 | Silent mode: no notification | 4 | 4.3 |
 | FR21 | Archive persists across resume | 2 | 2.3, 2.7 |
 | FR22 | Archive maintains integrity | 2 | 2.7 |
+| FR23 | Message IDs hidden by default | 5 | 5.1, 5.4 |
+| FR24 | Two-phase compaction enables ID visibility | 5 | 5.2, 5.4 |
 
 **NFR Coverage:**
 
@@ -942,8 +1145,8 @@ So that my workflow is completely uninterrupted.
 
 ## Summary
 
-**Total Epics:** 4
-**Total Stories:** 18
+**Total Epics:** 5
+**Total Stories:** 22
 
 | Epic | Stories | FRs | Focus |
 |------|---------|-----|-------|
@@ -951,14 +1154,16 @@ So that my workflow is completely uninterrupted.
 | 2 - Smart Compaction | 7 | FR6-13, FR21-22 | Core compaction functionality |
 | 3 - Content Retrieval | 2 | FR14-16 | Fetch archived content |
 | 4 - Autonomous Control | 3 | FR18-20 | User control over LLM behavior |
+| 5 - Message ID Privacy & Two-Phase | 4 | FR23-24 | ID hiding + two-phase compaction flow |
 
-**All 22 FRs covered. All 8 NFRs addressed.**
+**All 24 FRs covered. All 8 NFRs addressed.**
 
 **Implementation Order:**
 1. Epic 1 establishes foundation (can be parallelized internally)
 2. Epic 2 delivers core value (compaction works)
 3. Epic 3 completes the cycle (retrieval works)
 4. Epic 4 refines user experience (behavior modes)
+5. Epic 5 enables autonomous compaction (must be done for LLM to select compaction targets)
 
 **Ready for:** Sprint Planning and Development Implementation
 

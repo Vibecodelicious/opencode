@@ -20,11 +20,11 @@ _This document builds collaboratively through step-by-step discovery. Sections a
 
 ### Requirements Overview
 
-**Functional Requirements (22 FRs across 6 categories):**
+**Functional Requirements (24 FRs across 6 categories):**
 
 | Category | FRs | Architectural Implication |
 |----------|-----|---------------------------|
-| Message Identity | FR1-FR2 | New ID infrastructure in MessageV2, persistence guarantees |
+| Message Identity | FR1-FR2, FR23-24 | ID infrastructure in MessageV2, persistence guarantees, ID privacy + two-phase visibility |
 | Context Visibility | FR3-FR5 | Token checkpoint injection system, append-only constraint |
 | Compaction | FR6-FR13 | Compact tool implementation, summarization, storage, placeholder generation |
 | Retrieval | FR14-FR16 | Retrieve tool implementation, content restoration to context |
@@ -123,9 +123,35 @@ Any of these would suggest SQLite is warranted for Growth phase.
 - IDs already persist across session resume (stored in `storage/message/{sessionID}/{messageID}.json`)
 - No new ID infrastructure needed
 
-**ID Visibility:**
-- Normal conversation context: IDs NOT visible to LLM (standard AI SDK format)
-- Compaction summarization call context: IDs prefixed to text content (`[msg_xxx] message text...`)
+**ID Visibility (FR23, FR24):**
+
+Two-phase compaction enables ID visibility only when needed:
+
+| Phase | Flag State | ID Visibility | Context Builder |
+|-------|------------|---------------|-----------------|
+| Normal conversation | `compactionModeEnabled: false` | IDs hidden | `toModelMessage()` without prefixes |
+| Compaction preparation | `compactionModeEnabled: true` | IDs visible | `toModelMessage()` with prefixes |
+| Compaction summarization | N/A (separate LLM call) | IDs visible | `toModelMessageWithIDs()` |
+
+**Two-Phase Compaction Flow:**
+1. LLM sees high context utilization, decides to compact
+2. LLM calls `compact()` with no ranges (prepare mode)
+3. Tool sets session flag: `compactionModeEnabled = true`
+4. Tool returns: "Message IDs now visible. IMPORTANT: Do NOT mimic/generate IDs - only reference IDs visible on actual messages."
+5. System rebuilds context for tool response → flag is true → IDs prefixed
+6. LLM receives updated context with `[msg_xxx]` prefixes visible
+7. LLM calls `compact({ ranges: [...] })` with specific message IDs
+8. Compaction executes, then flag resets: `compactionModeEnabled = false`
+9. Subsequent context builds hide message IDs again
+
+**Tool Description Guidance (`compact.txt`):**
+- Explain two-phase flow: call with no ranges first to see IDs
+- "Message IDs are NOT visible by default"
+- "Do not generate or guess message IDs - only use IDs visible after prepare phase"
+
+**Key Implementation Detail:** The flag flip happens BEFORE the tool response is sent. When the system builds context to deliver the tool response, it checks the flag and includes ID prefixes. This enables single-turn compaction without extra user messages.
+
+**Rationale:** During testing, always-visible IDs caused the LLM to mimic the `[msg_xxx]` pattern, generating fake message IDs that failed when used. Two-phase approach hides IDs by default but enables visibility exactly when the LLM needs to select compaction targets.
 
 ### Compaction Architecture
 
@@ -355,11 +381,11 @@ All architectural decisions work together as a unified system:
 
 ### Requirements Coverage
 
-**Functional Requirements (22 FRs):**
+**Functional Requirements (24 FRs):**
 
 | Category | FRs | Architecture Support |
 |----------|-----|---------------------|
-| Message Identity | FR1-FR2 | ✅ Existing `msg_xxx` IDs, already persisted |
+| Message Identity | FR1-FR2, FR23-24 | ✅ Existing `msg_xxx` IDs, persisted; IDs hidden by default, two-phase compaction enables visibility |
 | Context Visibility | FR3-FR5 | ✅ Context gauge parts with ramping frequency |
 | Compaction | FR6-FR13 | ✅ Compact tool, archive metadata, placeholder format |
 | Retrieval | FR14-FR16 | ✅ Retrieve tool, content stays in original storage |

@@ -47,7 +47,7 @@ development_status:
   epic-1-retrospective: optional
 
   # Epic 2: Smart Compaction
-  epic-2: in-progress
+  epic-2: done
   2-1-compact-tool-basic-structure: done
   2-2-compaction-llm-call-for-summary-generation: done
   2-3-archive-metadata-storage: done
@@ -64,8 +64,16 @@ development_status:
   epic-3-retrospective: optional
 
   # Epic 4: Autonomous Behavior Control
-  epic-4: in-progress
+  epic-4: done
   4-1-ask-mode-implementation: done
-  4-2-notify-mode-implementation: backlog
-  4-3-silent-mode-implementation: backlog
+  4-2-notify-mode-implementation: done
+  4-3-silent-mode-implementation: done
   epic-4-retrospective: optional
+
+  # Epic 5: Message ID Privacy & Two-Phase Compaction
+  epic-5: in-progress
+  5-1-conditional-id-prefixing-based-on-compaction-mode-flag: backlog
+  5-2-compact-tool-prepare-mode: backlog
+  5-3-verify-compaction-summarization-uses-id-annotated-context: backlog
+  5-4-add-integration-tests-for-message-id-privacy: backlog
+  epic-5-retrospective: optional
