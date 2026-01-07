@@ -1121,10 +1121,130 @@ so that I can reference specific messages when compacting, debugging, or discuss
 
 ---
 
+### Story 5.6: Fix TUI Display Corruption During Smart Compaction with Claude Opus 4.5
+
+**Status:** drafted
+
+As a user,
+I want smart compaction to execute without corrupting the TUI display,
+so that the interface remains readable during compaction operations.
+
+**Bug Description:**
+
+When using Claude Opus 4.5 model, raw output (API responses, JSON structures, debug info) bleeds into the TUI during compaction, corrupting the display layout. This does not occur with the BigPickle LLM model.
+
+**Acceptance Criteria:**
+
+**Given** smart compaction is triggered with Claude Opus 4.5
+**When** the compaction LLM call executes
+**Then** no raw output bleeds into the TUI display
+
+**And** compaction status messages render within TUI components (not raw stdout)
+**And** any errors are captured and displayed via proper TUI error handling
+**And** behavior matches the clean output observed with BigPickle model
+
+**Investigation Areas:**
+
+- **🔴 NEW CODE LOGGING PRACTICES**: Smart compaction is newly written code. Did we incorrectly use `console.log`/`console.error` instead of OpenCode's established logging patterns? Compare our compaction code against how existing tools handle output:
+  - Check `packages/opencode/src/tool/compact.ts` for any direct console calls
+  - Check the summarization LLM call - is output being streamed to stdout instead of captured?
+  - Review how other tools (e.g., existing ones in `tool/`) suppress or route their output through the TUI
+
+- **OpenCode's logging conventions**: Find and follow the existing pattern - likely a logger abstraction or TUI-aware output mechanism. The fact that BigPickle works suggests the issue might be in how we handle streaming responses, and Opus 4.5's larger/different response format exposes our mistake.
+
+- **Model-specific response handling**: Does Opus 4.5 produce more verbose streaming chunks that our code doesn't properly capture?
+
+- **streamText() output capture**: Verify the separate LLM call for summarization routes all output through proper channels, not raw stdout
+
+**Technical Notes:**
+- Location: `packages/opencode/src/tool/compact.ts`
+- This is likely a TUI output capture issue specific to how Claude Opus 4.5 responses are streamed
+- The bug only manifests during the compaction operation, not during normal conversation
+- Compare code paths between BigPickle and Opus 4.5 model handling
+- Key question for dev: "How do other OpenCode tools handle LLM calls and logging? Are we following the same pattern, or did we take a shortcut?"
+
+**Evidence:**
+- Working: `/tmp/opencode_smart_compaction.png` (BigPickle - clean TUI)
+- Bug: `/tmp/opencode_compaction_bug.png` (Opus 4.5 - garbled output)
+
+**Prerequisites:** None
+
+**NFRs Addressed:** NFR1 (tool system integration)
+
+---
+
+### Story 5.7: Fix Archive Metadata Not Stored During Smart Compaction (Data Loss Bug)
+
+**Status:** drafted
+
+As a user,
+I want smart compaction to reliably store archive metadata,
+so that archived content can be retrieved and is never lost.
+
+**Bug Description:**
+
+Compaction reports success but fails to store summary and index terms. When retrieval is attempted:
+- Archive shows "No summary generated" and "No index terms"
+- Retrieve tool reports "message wasn't properly archived as an anchor"
+- **Original content is no longer accessible** - this is a data loss bug
+
+**Root Cause Hypothesis:**
+
+Likely related to Story 5.6 - if the compaction LLM response is not being properly captured (causing TUI garbling), it's also not capturing the summary/index terms that should be stored as archive metadata.
+
+**Acceptance Criteria:**
+
+**Given** smart compaction with Claude Opus 4.5
+**When** the compaction LLM call executes
+**Then** the summary and index terms are correctly parsed from the LLM response
+
+**And** archive metadata is stored on the first message in range:
+```typescript
+{
+  archive: {
+    summary: "...",  // NOT empty
+    indexTerms: [...],  // NOT empty
+    rangeEnd: "msg_xyz"
+  }
+}
+```
+
+**And** retrieve tool successfully returns archived content
+**And** if compaction LLM call fails to generate metadata, the tool reports failure (not false success)
+**And** original content remains accessible if compaction fails
+
+**Investigation Areas:**
+
+- **🔴 RESPONSE CAPTURE**: How is the summarization LLM response being captured? Is `streamText()` output going to stdout instead of being collected into a variable for parsing?
+
+- **🔴 STREAMING vs BUFFERED**: Does Opus 4.5 stream responses differently than BigPickle? Are we correctly awaiting/collecting the full response before parsing?
+
+- **🔴 ERROR SWALLOWING**: Check for `try/catch` blocks that might be swallowing failures and continuing with empty metadata
+
+- **Default values masking failures**: Look for code like `summary: ""` or `indexTerms: []` that allows empty values instead of failing
+
+- **Model-specific response format**: Does Opus 4.5 return the summary/indexTerms in a different structure we're not handling?
+
+**Technical Notes:**
+- Location: `packages/opencode/src/tool/compact.ts`
+- The fact that compaction "succeeds" but stores no metadata suggests we're catching/ignoring an error somewhere
+- **Critical**: This is a data loss bug - compaction should fail loudly if metadata can't be generated, not silently proceed
+- Compaction should be atomic: either fully succeed with all metadata, or fail and leave original content untouched
+
+**Evidence:**
+- Bug: `/tmp/opencode_compaction_bug_2.png` (retrieval failure, "No summary generated")
+
+**Prerequisites:** None (but likely shares root cause with Story 5.6)
+
+**NFRs Addressed:** NFR5 (no data loss), NFR6 (exact retrieval), NFR8 (atomic storage operations)
+
+---
+
 **Epic 5 Complete**
 
-**Stories Created:** 5
+**Stories Created:** 7
 **FR Coverage:** FR23, FR24
+**NFR Coverage:** NFR1, NFR5, NFR6, NFR8 (Stories 5.6, 5.7 fix NFR violations)
 **Architecture Sections Used:** ID Visibility, Two-Phase Compaction Flow, Message Context Building
 
 ---
@@ -1162,21 +1282,21 @@ so that I can reference specific messages when compacting, debugging, or discuss
 
 | NFR | Description | Addressed In |
 |-----|-------------|--------------|
-| NFR1 | Tool system integration | Stories 1.6, 2.1, 3.1 |
+| NFR1 | Tool system integration | Stories 1.6, 2.1, 3.1, 5.6 |
 | NFR2 | Storage API integration | Stories 2.3, 2.7 |
 | NFR3 | Config system integration | Story 1.5 |
 | NFR4 | MessageV2 integration | Stories 1.1, 1.3 |
-| NFR5 | No data loss | Story 2.7 |
-| NFR6 | Exact retrieval | Story 3.1 |
+| NFR5 | No data loss | Stories 2.7, 5.7 |
+| NFR6 | Exact retrieval | Stories 3.1, 5.7 |
 | NFR7 | Valid placeholder references | Story 2.4 |
-| NFR8 | Atomic storage operations | Story 2.7 |
+| NFR8 | Atomic storage operations | Stories 2.7, 5.7 |
 
 ---
 
 ## Summary
 
 **Total Epics:** 5
-**Total Stories:** 22
+**Total Stories:** 24
 
 | Epic | Stories | FRs | Focus |
 |------|---------|-----|-------|
@@ -1184,7 +1304,7 @@ so that I can reference specific messages when compacting, debugging, or discuss
 | 2 - Smart Compaction | 7 | FR6-13, FR21-22 | Core compaction functionality |
 | 3 - Content Retrieval | 2 | FR14-16 | Fetch archived content |
 | 4 - Autonomous Control | 3 | FR18-20 | User control over LLM behavior |
-| 5 - Message ID Privacy & Two-Phase | 4 | FR23-24 | ID hiding + two-phase compaction flow |
+| 5 - Message ID Privacy & Two-Phase | 7 | FR23-24, NFR1/5/6/8 | ID hiding + two-phase compaction + bug fixes |
 
 **All 24 FRs covered. All 8 NFRs addressed.**
 

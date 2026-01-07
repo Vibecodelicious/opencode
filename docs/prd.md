@@ -517,3 +517,9 @@ The following items were observed during implementation. They are **not** part o
 - Tests cover config and environment overrides but do not exercise the CLI override path (`--compaction-mode`, `--disable-autocompact`), leaving that flow unverified.
 - **Compaction summary display**: The compaction summary is currently shown via LLM response text rather than tool output. The tool should display the summary directly to the user for consistent UX.
 - **Message ID placement in TUI**: ~~Message IDs are currently shown at the start of message content. For user messages, the ID should appear next to the username/timestamp metadata line. For assistant messages, a similar metadata line treatment should be added for visual consistency.~~ **Addressed by Story 5.5** - IDs will be right-aligned in footer/metadata areas.
+
+### Bugs Discovered During Testing (Addressed by Stories 5.6, 5.7)
+
+- **TUI corruption with Claude Opus 4.5**: When using Claude Opus 4.5 model, raw output (API responses, JSON structures) bleeds into the TUI during compaction, corrupting the display. Does not occur with BigPickle model. Likely caused by new compaction code not following OpenCode's established logging/output patterns. **Addressed by Story 5.6.**
+
+- **Archive metadata not stored (DATA LOSS)**: Compaction reports success but fails to store summary and index terms with Claude Opus 4.5. Retrieve tool reports "No summary generated" and original content becomes inaccessible. This is a violation of NFR5 (no data loss), NFR6 (exact retrieval), and NFR8 (atomic operations). Likely shares root cause with TUI corruption - LLM response not being captured correctly. **Addressed by Story 5.7.**

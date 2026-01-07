@@ -352,6 +352,10 @@ function getModelFromMessages(messages: MessageV2.WithParts[]): { providerID: st
 /**
  * Generates summaries for validated message ranges using an LLM call.
  * Uses the same model as the session's last assistant message.
+ *
+ * Note: This function properly consumes the stream via fullStream iteration
+ * to prevent any stdout leakage that could corrupt the TUI display.
+ * This matches the pattern used in SessionProcessor.process().
  */
 async function generateSummaries(input: {
   sessionID: string
@@ -396,6 +400,11 @@ Respond in JSON format:
   try {
     const response = await streamText({
       abortSignal: input.abort,
+      // Route errors through the logging system instead of stdout
+      // This prevents TUI corruption with Claude Opus 4.5 and other models
+      onError(error) {
+        log.error("stream error during summary generation", { error })
+      },
       providerOptions: ProviderTransform.providerOptions(
         model.npm,
         model.providerID,
@@ -430,7 +439,30 @@ Respond in JSON format:
       }),
     })
 
-    const text = await response.text
+    // Consume the stream properly via fullStream iteration.
+    // This matches the pattern in SessionProcessor.process() and prevents
+    // stdout leakage that was causing TUI corruption with Claude Opus 4.5.
+    // Previously we used `await response.text` which could leak output during
+    // stream consumption with some providers.
+    let text = ""
+    for await (const chunk of response.fullStream) {
+      input.abort.throwIfAborted()
+      switch (chunk.type) {
+        case "text-delta":
+          text += chunk.text
+          break
+        case "error":
+          log.error("stream chunk error during summary generation", { error: chunk.error })
+          break
+        case "finish":
+          // Expected terminal chunk - no logging needed
+          break
+        default:
+          // Log unexpected chunk types for diagnostics
+          log.info("unexpected stream chunk during summary generation", { type: chunk.type })
+      }
+    }
+
     log.info("summaries generated", { responseLength: text.length })
 
     return parseCompactionResponse(text)
