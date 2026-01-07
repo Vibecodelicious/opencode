@@ -1025,7 +1025,6 @@ function UserMessage(props: {
             flexShrink={0}
           >
             <text>
-              <span style={{ fg: theme.textMuted }}>[{props.message.id}] </span>
               <span style={{ fg: theme.text }}>{text()?.text}</span>
             </text>
             <Show when={files().length}>
@@ -1047,21 +1046,24 @@ function UserMessage(props: {
                 </For>
               </box>
             </Show>
-            <text fg={theme.textMuted}>
-              {ctx.usernameVisible() ? `${sync.data.config.username ?? "You"} ` : "You"}{" "}
-              <Show
-                when={queued()}
-                fallback={
-                  <span style={{ fg: theme.textMuted }}>
-                    {ctx.showTimestamps()
-                      ? Locale.todayTimeOrDateTime(props.message.time.created)
-                      : Locale.time(props.message.time.created)}
-                  </span>
-                }
-              >
-                <span style={{ bg: theme.accent, fg: theme.backgroundPanel, bold: true }}> QUEUED </span>
-              </Show>
-            </text>
+            <box flexDirection="row" justifyContent="space-between">
+              <text fg={theme.textMuted}>
+                {ctx.usernameVisible() ? `${sync.data.config.username ?? "You"} ` : "You"}{" "}
+                <Show
+                  when={queued()}
+                  fallback={
+                    <span style={{ fg: theme.textMuted }}>
+                      {ctx.showTimestamps()
+                        ? Locale.todayTimeOrDateTime(props.message.time.created)
+                        : Locale.time(props.message.time.created)}
+                    </span>
+                  }
+                >
+                  <span style={{ bg: theme.accent, fg: theme.backgroundPanel, bold: true }}> QUEUED </span>
+                </Show>
+              </text>
+              <text fg={theme.textMuted}>{props.message.id}</text>
+            </box>
           </box>
         </box>
       </Show>
@@ -1098,9 +1100,6 @@ function AssistantMessage(props: { message: AssistantMessage; parts: Part[]; las
 
   return (
     <>
-      <box paddingLeft={3} marginTop={1}>
-        <text fg={theme.textMuted}>[{props.message.id}]</text>
-      </box>
       <For each={props.parts}>
         {(part, index) => {
           const component = createMemo(() => PART_MAPPING[part.type as keyof typeof PART_MAPPING])
@@ -1130,6 +1129,9 @@ function AssistantMessage(props: { message: AssistantMessage; parts: Part[]; las
           <text fg={theme.textMuted}>{props.message.error?.data.message}</text>
         </box>
       </Show>
+      <box paddingLeft={3} flexDirection="row" justifyContent="flex-end">
+        <text fg={theme.textMuted}>{props.message.id}</text>
+      </box>
       <Switch>
         <Match when={props.last || final()}>
           <box paddingLeft={3}>
