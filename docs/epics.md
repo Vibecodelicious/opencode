@@ -1175,7 +1175,7 @@ When using Claude Opus 4.5 model, raw output (API responses, JSON structures, de
 
 ### Story 5.7: Fix Archive Metadata Not Stored During Smart Compaction (Data Loss Bug)
 
-**Status:** drafted
+**Status:** done (implemented together with Story 5.6)
 
 As a user,
 I want smart compaction to reliably store archive metadata,

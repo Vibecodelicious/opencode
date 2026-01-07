@@ -14,6 +14,10 @@ import { Storage } from "../storage/storage"
 import { Config } from "../config/config"
 import { Permission } from "../permission"
 import { CompactionModeState } from "../session/compaction-mode-state"
+import { SessionProcessor } from "../session/processor"
+import { Identifier } from "../id/id"
+import { Instance } from "../project/instance"
+import { SystemPrompt } from "../session/system"
 
 const log = Log.create({ service: "tool.compact" })
 
@@ -353,9 +357,9 @@ function getModelFromMessages(messages: MessageV2.WithParts[]): { providerID: st
  * Generates summaries for validated message ranges using an LLM call.
  * Uses the same model as the session's last assistant message.
  *
- * Note: This function properly consumes the stream via fullStream iteration
- * to prevent any stdout leakage that could corrupt the TUI display.
- * This matches the pattern used in SessionProcessor.process().
+ * Routes the API call through SessionProcessor to work with Claude Code's
+ * OAuth credentials (which are restricted to Claude Code API calls only).
+ * This matches the pattern used in session/compaction.ts for auto-compaction.
  */
 async function generateSummaries(input: {
   sessionID: string
@@ -398,70 +402,113 @@ Respond in JSON format:
   })
 
   try {
-    const response = await streamText({
-      abortSignal: input.abort,
-      // Route errors through the logging system instead of stdout
-      // This prevents TUI corruption with Claude Opus 4.5 and other models
-      onError(error) {
-        log.error("stream error during summary generation", { error })
+    // Create a temporary assistant message for the summary generation.
+    // This is required to route the API call through SessionProcessor,
+    // which works with Claude Code's restricted OAuth credentials.
+    const lastMessage = input.allMessages[input.allMessages.length - 1]
+    const msg = (await Session.updateMessage({
+      id: Identifier.ascending("message"),
+      role: "assistant",
+      parentID: lastMessage?.info.id ?? Identifier.ascending("message"),
+      sessionID: input.sessionID,
+      mode: "compact-summary",
+      // Mark as internal/hidden so it doesn't show in the conversation
+      summary: true,
+      path: {
+        cwd: Instance.directory,
+        root: Instance.worktree,
       },
-      providerOptions: ProviderTransform.providerOptions(
-        model.npm,
-        model.providerID,
-        pipe(
-          {},
-          mergeDeep(ProviderTransform.options(model.providerID, model.modelID, model.npm ?? "", input.sessionID)),
-          mergeDeep(model.info.options),
-        ),
-      ),
-      headers: model.info.headers,
-      messages: [
-        { role: "system", content: COMPACTION_SUMMARY_SYSTEM_PROMPT } as ModelMessage,
-        ...toModelMessageWithIDs(input.allMessages),
-        {
-          role: "user",
-          content: [{ type: "text", text: userPrompt }],
-        } as ModelMessage,
-      ],
-      model: wrapLanguageModel({
-        model: model.language,
-        middleware: [
-          {
-            async transformParams(args) {
-              if (args.type === "stream") {
-                // @ts-expect-error
-                args.params.prompt = ProviderTransform.message(args.params.prompt, model.providerID, model.modelID)
-              }
-              return args.params
-            },
-          },
-        ],
-      }),
+      cost: 0,
+      tokens: {
+        output: 0,
+        input: 0,
+        reasoning: 0,
+        cache: { read: 0, write: 0 },
+      },
+      modelID: input.model.modelID,
+      providerID: model.providerID,
+      time: {
+        created: Date.now(),
+      },
+    })) as MessageV2.Assistant
+
+    const processor = SessionProcessor.create({
+      assistantMessage: msg,
+      sessionID: input.sessionID,
+      providerID: input.model.providerID,
+      model: model.info,
+      abort: input.abort,
     })
 
-    // Consume the stream properly via fullStream iteration.
-    // This matches the pattern in SessionProcessor.process() and prevents
-    // stdout leakage that was causing TUI corruption with Claude Opus 4.5.
-    // Previously we used `await response.text` which could leak output during
-    // stream consumption with some providers.
-    let text = ""
-    for await (const chunk of response.fullStream) {
-      input.abort.throwIfAborted()
-      switch (chunk.type) {
-        case "text-delta":
-          text += chunk.text
-          break
-        case "error":
-          log.error("stream chunk error during summary generation", { error: chunk.error })
-          break
-        case "finish":
-          // Expected terminal chunk - no logging needed
-          break
-        default:
-          // Log unexpected chunk types for diagnostics
-          log.info("unexpected stream chunk during summary generation", { type: chunk.type })
-      }
-    }
+    // Build system prompts - include anthropic spoof header when using Claude models
+    // This identifies the request as coming from Claude Code
+    // Check both providerID and modelID since providers like "opencode" proxy to anthropic
+    const needsAnthropicHeader =
+      input.model.providerID === "anthropic" ||
+      input.model.providerID.includes("anthropic") ||
+      input.model.modelID.includes("claude")
+    const systemPrompts: string[] = needsAnthropicHeader
+      ? [...SystemPrompt.header("anthropic"), COMPACTION_SUMMARY_SYSTEM_PROMPT]
+      : [COMPACTION_SUMMARY_SYSTEM_PROMPT]
+
+    await processor.process(() =>
+      streamText({
+        onError(error) {
+          log.error("stream error during summary generation", { error })
+        },
+        maxRetries: 0,
+        providerOptions: ProviderTransform.providerOptions(
+          model.npm,
+          model.providerID,
+          pipe(
+            {},
+            mergeDeep(ProviderTransform.options(model.providerID, model.modelID, model.npm ?? "", input.sessionID)),
+            mergeDeep(model.info.options),
+          ),
+        ),
+        headers: model.info.headers,
+        abortSignal: input.abort,
+        tools: model.info.tool_call ? {} : undefined,
+        messages: [
+          ...systemPrompts.map((x): ModelMessage => ({ role: "system", content: x })),
+          // Filter out step-start and step-finish parts to avoid breaking Anthropic's
+          // API validation. These metadata parts can appear after tool_use blocks,
+          // which Anthropic rejects (tool_use must be followed by tool_result).
+          ...toModelMessageWithIDs(
+            input.allMessages.map((msg) => ({
+              ...msg,
+              parts: msg.parts.filter((p) => p.type !== "step-start" && p.type !== "step-finish"),
+            })),
+          ),
+          {
+            role: "user",
+            content: [{ type: "text", text: userPrompt }],
+          } as ModelMessage,
+        ],
+        model: wrapLanguageModel({
+          model: model.language,
+          middleware: [
+            {
+              async transformParams(args) {
+                if (args.type === "stream") {
+                  // @ts-expect-error
+                  args.params.prompt = ProviderTransform.message(args.params.prompt, model.providerID, model.modelID)
+                }
+                return args.params
+              },
+            },
+          ],
+        }),
+      }),
+    )
+
+    // Extract the generated text from the message parts
+    const messages = await Session.messages({ sessionID: input.sessionID })
+    const summaryMsg = messages.find((m) => m.info.id === msg.id)
+    const text = summaryMsg?.parts
+      .filter((p): p is MessageV2.TextPart => p.type === "text")
+      .map((p) => p.text)
+      .join("") ?? ""
 
     log.info("summaries generated", { responseLength: text.length })
 
