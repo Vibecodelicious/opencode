@@ -73,7 +73,7 @@ development_status:
   # Epic 5: Message ID Privacy & Two-Phase Compaction
   epic-5: in-progress
   5-1-conditional-id-prefixing-based-on-compaction-mode-flag: review
-  5-2-compact-tool-prepare-mode: backlog
-  5-3-verify-compaction-summarization-uses-id-annotated-context: backlog
-  5-4-add-integration-tests-for-message-id-privacy: backlog
+  5-2-compact-tool-prepare-mode: done
+  5-3-verify-compaction-summarization-uses-id-annotated-context: review
+  5-4-add-integration-tests-for-message-id-privacy: done
   epic-5-retrospective: optional

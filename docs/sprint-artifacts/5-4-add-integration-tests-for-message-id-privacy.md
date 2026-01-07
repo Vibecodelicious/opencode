@@ -1,6 +1,6 @@
 # Story 5.4: Add Integration Tests for Message ID Privacy and Two-Phase Flow
 
-Status: review
+Status: done
 
 ## Story
 
