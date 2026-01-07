@@ -3,7 +3,7 @@ import path from "path"
 import { tmpdir, createTestSession } from "../fixture/fixture"
 import { Instance } from "../../src/project/instance"
 import { Session } from "../../src/session"
-import { CompactTool } from "../../src/tool/compact"
+import { CompactTool, isExecuteMetadata } from "../../src/tool/compact"
 import { Permission } from "../../src/permission"
 import { Identifier } from "../../src/id/id"
 
@@ -62,7 +62,8 @@ describe("compact tool notify mode", () => {
         expect(result.output.length).toBeGreaterThan(0)
 
         // When archival succeeds, retrieval hint MUST be present per AC2
-        if (result.metadata.archived > 0) {
+        expect(isExecuteMetadata(result.metadata)).toBe(true)
+        if (isExecuteMetadata(result.metadata) && result.metadata.archived > 0) {
           expect(result.output).toContain("retrieve tool")
           expect(result.output).toContain("archiveId")
           // Verify hint includes actual message IDs (msg_ prefix from id.ts format)
@@ -112,15 +113,18 @@ describe("compact tool notify mode", () => {
         expect(result.output).not.toBe("")
 
         // Should show "No summary generated" when LLM summarization fails
-        if (result.metadata.archived === 0) {
-          expect(result.output).toContain("No summary generated")
-          // Retrieval hint should NOT be present when nothing was archived
-          expect(result.output).not.toContain("To restore archived content")
-        }
+        expect(isExecuteMetadata(result.metadata)).toBe(true)
+        if (isExecuteMetadata(result.metadata)) {
+          if (result.metadata.archived === 0) {
+            expect(result.output).toContain("No summary generated")
+            // Retrieval hint should NOT be present when nothing was archived
+            expect(result.output).not.toContain("To restore archived content")
+          }
 
-        // Metadata should still be populated correctly
-        expect(result.metadata.totalMessages).toBe(3)
-        expect(result.metadata.rangeCount).toBe(1)
+          // Metadata should still be populated correctly
+          expect(result.metadata.totalMessages).toBe(3)
+          expect(result.metadata.rangeCount).toBe(1)
+        }
 
         await Session.remove(session.id)
       },
@@ -179,9 +183,12 @@ describe("compact tool notify mode", () => {
         expect(result.output).toContain("Index:")
 
         // Metadata should be populated
-        expect(result.metadata.totalMessages).toBe(3)
-        expect(result.metadata.rangeCount).toBe(1)
-        expect(result.metadata.totalTokens).toBeGreaterThan(0)
+        expect(isExecuteMetadata(result.metadata)).toBe(true)
+        if (isExecuteMetadata(result.metadata)) {
+          expect(result.metadata.totalMessages).toBe(3)
+          expect(result.metadata.rangeCount).toBe(1)
+          expect(result.metadata.totalTokens).toBeGreaterThan(0)
+        }
 
         await Session.remove(session.id)
       },
@@ -276,8 +283,11 @@ describe("compact tool notify mode", () => {
         expect(result.output).toContain(msgIds[3])
 
         // Metadata should reflect both ranges
-        expect(result.metadata.rangeCount).toBe(2)
-        expect(result.metadata.totalMessages).toBe(4)
+        expect(isExecuteMetadata(result.metadata)).toBe(true)
+        if (isExecuteMetadata(result.metadata)) {
+          expect(result.metadata.rangeCount).toBe(2)
+          expect(result.metadata.totalMessages).toBe(4)
+        }
 
         await Session.remove(session.id)
       },

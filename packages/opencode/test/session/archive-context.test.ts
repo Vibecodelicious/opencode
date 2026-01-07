@@ -184,6 +184,10 @@ describe("toModelMessageWithIDs", () => {
               time: { start: Date.now(), end: Date.now() },
               attachments: [
                 {
+                  id: "file_1",
+                  sessionID: "ses",
+                  messageID: "msg_assistant",
+                  type: "file",
                   url: "http://example.com/file.txt",
                   mime: "text/plain",
                   filename: "file.txt",
@@ -197,6 +201,7 @@ describe("toModelMessageWithIDs", () => {
             messageID: "msg_assistant",
             type: "reasoning",
             text: "Internal thought",
+            time: { start: Date.now(), end: Date.now() },
           },
           {
             ...basePart,
@@ -228,8 +233,10 @@ describe("toModelMessageWithIDs", () => {
             attempt: 2,
             error: {
               name: "APIError",
-              message: "timeout",
-              isRetryable: true,
+              data: {
+                message: "timeout",
+                isRetryable: true,
+              },
             },
             time: { created: Date.now() },
           },

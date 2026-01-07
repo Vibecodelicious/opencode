@@ -476,7 +476,7 @@ test("rejects invalid compaction mode with helpful error", async () => {
         const issues = (error as any)?.data?.issues ?? []
         const messages = issues.map((issue: any) => issue.message)
         expect(
-          messages.some((message) =>
+          messages.some((message: string) =>
             message.includes("compaction.mode") || message.toLowerCase().includes("expected one of"),
           ),
         ).toBe(true)
@@ -511,7 +511,7 @@ test("rejects non-boolean compaction enabled with helpful error", async () => {
       } catch (error) {
         const issues = (error as any)?.data?.issues ?? []
         const messages = issues.map((issue: any) => issue.message)
-        expect(messages.some((message) => message.toLowerCase().includes("boolean"))).toBe(true)
+        expect(messages.some((message: string) => message.toLowerCase().includes("boolean"))).toBe(true)
       }
     },
   })

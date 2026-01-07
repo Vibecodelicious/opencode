@@ -3,7 +3,7 @@ import path from "path"
 import { tmpdir, createTestSession } from "../fixture/fixture"
 import { Instance } from "../../src/project/instance"
 import { Session } from "../../src/session"
-import { CompactTool } from "../../src/tool/compact"
+import { CompactTool, isExecuteMetadata } from "../../src/tool/compact"
 import { Permission } from "../../src/permission"
 import { Identifier } from "../../src/id/id"
 
@@ -135,13 +135,16 @@ describe("compact tool silent mode", () => {
         }, ctx)
 
         // Metadata should be fully populated for internal tracking
-        expect(result.metadata.totalMessages).toBe(3)
-        expect(result.metadata.rangeCount).toBe(1)
-        expect(result.metadata.totalTokens).toBeGreaterThan(0)
-        // archived field should exist (value depends on summarization success)
-        expect(typeof result.metadata.archived).toBe("number")
-        // summaries should be an object (may be empty if LLM not available)
-        expect(typeof result.metadata.summaries).toBe("object")
+        expect(isExecuteMetadata(result.metadata)).toBe(true)
+        if (isExecuteMetadata(result.metadata)) {
+          expect(result.metadata.totalMessages).toBe(3)
+          expect(result.metadata.rangeCount).toBe(1)
+          expect(result.metadata.totalTokens).toBeGreaterThan(0)
+          // archived field should exist (value depends on summarization success)
+          expect(typeof result.metadata.archived).toBe("number")
+          // summaries should be an object (may be empty if LLM not available)
+          expect(typeof result.metadata.summaries).toBe("object")
+        }
 
         await Session.remove(session.id)
       },
@@ -276,8 +279,11 @@ describe("compact tool silent mode", () => {
         expect(result.output).toBe("")
 
         // But metadata should reflect both ranges
-        expect(result.metadata.rangeCount).toBe(2)
-        expect(result.metadata.totalMessages).toBe(4)
+        expect(isExecuteMetadata(result.metadata)).toBe(true)
+        if (isExecuteMetadata(result.metadata)) {
+          expect(result.metadata.rangeCount).toBe(2)
+          expect(result.metadata.totalMessages).toBe(4)
+        }
 
         await Session.remove(session.id)
       },

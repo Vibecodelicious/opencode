@@ -105,7 +105,7 @@ export function toModelMessageWithIDs(messages: MessageV2.WithParts[]): ModelMes
           }
 
           const toolType = (`tool-${part.tool ?? "unknown"}`) as `tool-${string}`
-          const toolCallId = part.callID ?? Identifier.ascending("tool-call")
+          const toolCallId = part.callID ?? Identifier.ascending("part")
 
           if (part.state.status === "completed") {
             if (Array.isArray(part.state.attachments) && part.state.attachments.length) {

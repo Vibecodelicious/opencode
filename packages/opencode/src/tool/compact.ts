@@ -197,6 +197,54 @@ export interface CompactionSummary {
 }
 
 /**
+ * Metadata returned by the compact tool in prepare mode (no ranges specified).
+ * Prepare mode enables message ID visibility for the LLM to identify ranges.
+ */
+export interface CompactPrepareMetadata {
+  // Empty object - prepare mode returns no metadata
+}
+
+/**
+ * Metadata returned by the compact tool in execute mode (ranges specified).
+ * Contains details about the compaction operation results.
+ */
+export interface CompactExecuteMetadata {
+  /** Number of ranges processed */
+  rangeCount: number
+  /** Total number of messages across all ranges */
+  totalMessages: number
+  /** Estimated token count for all messages */
+  totalTokens: number
+  /** Generated summaries keyed by startMessageId */
+  summaries: Record<string, CompactionSummary>
+  /** Number of messages successfully archived */
+  archived: number
+  /** Number of messages skipped (already archived) - optional */
+  skipped?: number
+  /** Archival error messages - optional */
+  archivalErrors?: string[]
+  /** Summarization error message - optional */
+  error?: string
+}
+
+/**
+ * Union type for compact tool metadata.
+ * Can be either prepare mode (empty) or execute mode (full metadata).
+ */
+export type CompactToolMetadata = CompactPrepareMetadata | CompactExecuteMetadata
+
+/**
+ * Type guard to check if metadata is from execute mode.
+ * Execute mode metadata contains structured compaction results.
+ *
+ * @param metadata - The metadata to check
+ * @returns true if the metadata is from execute mode (has rangeCount property)
+ */
+export function isExecuteMetadata(metadata: CompactToolMetadata): metadata is CompactExecuteMetadata {
+  return "rangeCount" in metadata
+}
+
+/**
  * System prompt for the compaction summarization LLM call.
  * Instructs the model to generate concise summaries and semantic index terms.
  */
@@ -714,10 +762,10 @@ export async function validateArchiveReferences(sessionID: string): Promise<Refe
   }
 }
 
-export const CompactTool = Tool.define("compact", {
+export const CompactTool = Tool.define<typeof Parameters, CompactToolMetadata>("compact", {
   description: DESCRIPTION,
   parameters: Parameters,
-  async execute(params, ctx) {
+  async execute(params, ctx): Promise<{ title: string; output: string; metadata: CompactToolMetadata }> {
     // PREPARE MODE: If no ranges specified, enable message ID visibility
     if (isPrepareMode(params.ranges)) {
       log.info("prepare mode: enabling message ID visibility", { sessionID: ctx.sessionID })

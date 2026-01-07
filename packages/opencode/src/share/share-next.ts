@@ -12,6 +12,11 @@ import type * as SDK from "@opencode-ai/sdk"
 export namespace ShareNext {
   const log = Log.create({ service: "share-next" })
 
+  /** Type guard to filter out context-gauge parts (not in SDK.Part type) */
+  function isNotContextGauge(part: MessageV2.Part): part is Exclude<MessageV2.Part, MessageV2.ContextGaugePart> {
+    return part.type !== "context-gauge"
+  }
+
   export async function init() {
     const config = await Config.get()
     if (!config.enterprise) return
@@ -44,10 +49,13 @@ export namespace ShareNext {
       }
     })
     Bus.subscribe(MessageV2.Event.PartUpdated, async (evt) => {
-      await sync(evt.properties.part.sessionID, [
+      const part = evt.properties.part
+      // Skip context-gauge parts - not in SDK.Part type
+      if (!isNotContextGauge(part)) return
+      await sync(part.sessionID, [
         {
           type: "part",
-          data: evt.properties.part,
+          data: part,
         },
       ])
     })
@@ -182,7 +190,9 @@ export namespace ShareNext {
         type: "message" as const,
         data: x.info,
       })),
-      ...messages.flatMap((x) => x.parts.map((y) => ({ type: "part" as const, data: y }))),
+      ...messages.flatMap((x) =>
+        x.parts.filter(isNotContextGauge).map((y) => ({ type: "part" as const, data: y })),
+      ),
       {
         type: "session_diff",
         data: diffs,

@@ -234,9 +234,8 @@ export namespace SessionPrompt {
     return
   }
 
-  function getUserText(message?: MessageV2.User) {
-    if (!message) return ""
-    return message.parts
+  function getUserText(parts: MessageV2.Part[]) {
+    return parts
       .filter((part): part is MessageV2.TextPart => part.type === "text")
       .map((part) => part.text)
       .join(" ")
@@ -251,11 +250,12 @@ export namespace SessionPrompt {
     return "pending"
   }
 
-  async function addAssistantNote(input: { sessionID: string; agent: string; model: MessageV2.User["model"]; text: string }) {
+  async function addAssistantNote(input: { sessionID: string; agent: string; model: MessageV2.User["model"]; parentID: string; text: string }) {
     const message = await Session.updateMessage({
       id: Identifier.ascending("message"),
       role: "assistant",
       sessionID: input.sessionID,
+      parentID: input.parentID,
       mode: input.agent,
       path: {
         cwd: Instance.directory,
@@ -312,12 +312,16 @@ export namespace SessionPrompt {
       const compactionMode = compactionConfig.mode ?? "notify"
 
       let lastUser: MessageV2.User | undefined
+      let lastUserParts: MessageV2.Part[] = []
       let lastAssistant: MessageV2.Assistant | undefined
       let lastFinished: MessageV2.Assistant | undefined
       let tasks: (MessageV2.CompactionPart | MessageV2.SubtaskPart)[] = []
       for (let i = msgs.length - 1; i >= 0; i--) {
         const msg = msgs[i]
-        if (!lastUser && msg.info.role === "user") lastUser = msg.info as MessageV2.User
+        if (!lastUser && msg.info.role === "user") {
+          lastUser = msg.info as MessageV2.User
+          lastUserParts = msg.parts
+        }
         if (!lastAssistant && msg.info.role === "assistant") lastAssistant = msg.info as MessageV2.Assistant
         if (!lastFinished && msg.info.role === "assistant" && msg.info.finish)
           lastFinished = msg.info as MessageV2.Assistant
@@ -482,6 +486,7 @@ export namespace SessionPrompt {
               sessionID,
               agent: lastUser.agent,
               model: lastUser.model,
+              parentID: lastUser.id,
               text: "Context is getting full. Compact now? Reply yes to compact or no to skip.",
             })
             await Session.updatePart({ ...task, promptedAt: now })
@@ -493,12 +498,13 @@ export namespace SessionPrompt {
             continue
           }
 
-          const approval = parseCompactionApproval(getUserText(lastUser))
+          const approval = parseCompactionApproval(getUserText(lastUserParts))
           if (approval === "pending") {
             await addAssistantNote({
               sessionID,
               agent: lastUser.agent,
               model: lastUser.model,
+              parentID: lastUser.id,
               text: "Please reply yes to compact now or no to skip this auto-compaction.",
             })
             await Session.updatePart({ ...task, promptedAt: now })
@@ -511,6 +517,7 @@ export namespace SessionPrompt {
               sessionID,
               agent: lastUser.agent,
               model: lastUser.model,
+              parentID: lastUser.id,
               text: "Compaction skipped per your response.",
             })
             continue
@@ -534,6 +541,7 @@ export namespace SessionPrompt {
             sessionID,
             agent: lastUser.agent,
             model: lastUser.model,
+            parentID: lastUser.id,
             text: task.auto
               ? `Automatic compaction completed (${mode} mode).`
               : `Compaction completed (${mode} mode).`,

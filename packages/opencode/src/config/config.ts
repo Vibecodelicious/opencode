@@ -523,18 +523,11 @@ export namespace Config {
       compaction: z
         .object({
           mode: z
-            .enum(["ask", "notify", "silent"], {
-              errorMap: (issue, ctx) => {
-                if (issue.code === "invalid_enum_value") {
-                  return { message: "compaction.mode must be one of ask, notify, silent" }
-                }
-                return { message: ctx.defaultError }
-              },
-            })
+            .enum(["ask", "notify", "silent"])
             .default("notify")
             .describe("Controls compaction interaction mode"),
           enabled: z
-            .boolean({ invalid_type_error: "compaction.enabled must be a boolean" })
+            .boolean()
             .default(true)
             .describe("Toggle compaction features"),
         })
@@ -723,12 +716,12 @@ export namespace Config {
   export type Info = z.output<typeof Info>
 
   export const global = lazy(async () => {
-    let result: Info = pipe(
+    let result: Info = Info.parse(pipe(
       {},
       mergeDeep(await loadFile(path.join(Global.Path.config, "config.json"))),
       mergeDeep(await loadFile(path.join(Global.Path.config, "opencode.json"))),
       mergeDeep(await loadFile(path.join(Global.Path.config, "opencode.jsonc"))),
-    )
+    ))
 
     await import(path.join(Global.Path.config, "config"), {
       with: {
@@ -756,7 +749,7 @@ export namespace Config {
         if (err.code === "ENOENT") return
         throw new JsonError({ path: filepath }, { cause: err })
       })
-    if (!text) return {}
+    if (!text) return Info.parse({})
     return load(text, filepath)
   }
 

@@ -9,12 +9,12 @@ const xdgBase = path.join(projectRoot, ".tmp", "xdg-compact-archival")
 async function loadModules() {
   const { Instance } = await import("../../src/project/instance")
   const { Session } = await import("../../src/session")
-  const { CompactTool, storeArchiveMetadata } = await import("../../src/tool/compact")
+  const { CompactTool, storeArchiveMetadata, isExecuteMetadata } = await import("../../src/tool/compact")
   const { MessageV2 } = await import("../../src/session/message-v2")
   const { Storage } = await import("../../src/storage/storage")
   const pluginModule = await import("../../src/plugin")
 
-  return { Instance, Session, CompactTool, storeArchiveMetadata, MessageV2, Storage, pluginModule }
+  return { Instance, Session, CompactTool, storeArchiveMetadata, isExecuteMetadata, MessageV2, Storage, pluginModule }
 }
 
 type Modules = Awaited<ReturnType<typeof loadModules>>
@@ -34,7 +34,7 @@ async function ensureXdgDirs() {
 }
 
 async function withSandbox(
-  fn: (mods: Omit<Modules, "pluginModule"> & { storeArchiveMetadata: Modules["storeArchiveMetadata"] }) => Promise<void>,
+  fn: (mods: Omit<Modules, "pluginModule">) => Promise<void>,
 ) {
   const previousEnv = snapshotEnv([
     "XDG_CACHE_HOME",
@@ -65,6 +65,7 @@ async function withSandbox(
       Session: mods.Session,
       CompactTool: mods.CompactTool,
       storeArchiveMetadata: mods.storeArchiveMetadata,
+      isExecuteMetadata: mods.isExecuteMetadata,
       MessageV2: mods.MessageV2,
       Storage: mods.Storage,
     })
@@ -188,6 +189,7 @@ interface TestContext {
   MessageV2: Modules["MessageV2"]
   Storage: Modules["Storage"]
   storeArchiveMetadata: Modules["storeArchiveMetadata"]
+  isExecuteMetadata: Modules["isExecuteMetadata"]
   CompactTool: Modules["CompactTool"]
 }
 
@@ -211,6 +213,7 @@ async function withTestSession(
             MessageV2: mods.MessageV2,
             Storage: mods.Storage,
             storeArchiveMetadata: mods.storeArchiveMetadata,
+            isExecuteMetadata: mods.isExecuteMetadata,
             CompactTool: mods.CompactTool,
           })
         } finally {
@@ -288,9 +291,8 @@ async function preArchiveAsFollower(
   })
 }
 
-// Import MessageV2.Info type for Storage.update generics
-import type { MessageV2 as MessageV2Type } from "../../src/session/message-v2"
-type MessageV2 = typeof MessageV2Type
+// Import MessageV2 namespace for Storage.update generics
+import { MessageV2 } from "../../src/session/message-v2"
 
 describe("archive metadata schema and persistence", () => {
   test("archive field structure: summary, indexTerms, rangeEnd", async () => {
@@ -484,7 +486,10 @@ describe("CompactTool integration", () => {
         createToolContext(ctx.session.id),
       )
 
-      expect(result.metadata.archived).toBe(0)
+      expect(ctx.isExecuteMetadata(result.metadata)).toBe(true)
+      if (ctx.isExecuteMetadata(result.metadata)) {
+        expect(result.metadata.archived).toBe(0)
+      }
       expect(result.output).toContain("No model information available")
     })
   })
@@ -502,9 +507,12 @@ describe("CompactTool integration", () => {
       )
 
       expect(result.title).toBe("Compaction summaries generated")
-      expect(result.metadata.rangeCount).toBe(1)
-      expect(result.metadata.totalMessages).toBe(1)
-      expect(result.metadata.archived).toBe(0)
+      expect(ctx.isExecuteMetadata(result.metadata)).toBe(true)
+      if (ctx.isExecuteMetadata(result.metadata)) {
+        expect(result.metadata.rangeCount).toBe(1)
+        expect(result.metadata.totalMessages).toBe(1)
+        expect(result.metadata.archived).toBe(0)
+      }
       expect(result.output).toContain("ready for archival")
     })
   })

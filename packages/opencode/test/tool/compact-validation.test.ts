@@ -9,10 +9,10 @@ const xdgBase = path.join(projectRoot, ".tmp", "xdg-compact-validation")
 async function loadModules() {
   const { Instance } = await import("../../src/project/instance")
   const { Session } = await import("../../src/session")
-  const { CompactTool } = await import("../../src/tool/compact")
+  const { CompactTool, isExecuteMetadata } = await import("../../src/tool/compact")
   const pluginModule = await import("../../src/plugin")
 
-  return { Instance, Session, CompactTool, pluginModule }
+  return { Instance, Session, CompactTool, isExecuteMetadata, pluginModule }
 }
 
 type Modules = Awaited<ReturnType<typeof loadModules>>
@@ -58,7 +58,7 @@ async function withSandbox(
   await mods.Instance.disposeAll()
 
   try {
-    await fn({ Instance: mods.Instance, Session: mods.Session, CompactTool: mods.CompactTool })
+    await fn({ Instance: mods.Instance, Session: mods.Session, CompactTool: mods.CompactTool, isExecuteMetadata: mods.isExecuteMetadata })
   } finally {
     mods.pluginModule.Plugin.list = previousPluginList
     for (const [key, value] of Object.entries(previousEnv)) {
@@ -75,7 +75,7 @@ async function withSandbox(
 
 describe("compact tool validation with real sessions", () => {
   test("validates messages exist and returns success for valid ranges", async () => {
-    await withSandbox(async ({ Instance, Session, CompactTool }) => {
+    await withSandbox(async ({ Instance, Session, CompactTool, isExecuteMetadata }) => {
       await Instance.provide({
         directory: projectRoot,
         fn: async () => {
@@ -164,8 +164,11 @@ describe("compact tool validation with real sessions", () => {
           expect(result.output).toContain("Generated summaries for 1 range")
           expect(result.output).toContain("3 messages")
           expect(result.output).toContain("ready for archival")
-          expect(result.metadata.rangeCount).toBe(1)
-          expect(result.metadata.totalMessages).toBe(3)
+          expect(isExecuteMetadata(result.metadata)).toBe(true)
+          if (isExecuteMetadata(result.metadata)) {
+            expect(result.metadata.rangeCount).toBe(1)
+            expect(result.metadata.totalMessages).toBe(3)
+          }
 
           // Cleanup
           await Session.remove(session.id)
@@ -175,7 +178,7 @@ describe("compact tool validation with real sessions", () => {
   })
 
   test("validates multiple non-overlapping ranges", async () => {
-    await withSandbox(async ({ Instance, Session, CompactTool }) => {
+    await withSandbox(async ({ Instance, Session, CompactTool, isExecuteMetadata }) => {
       await Instance.provide({
         directory: projectRoot,
         fn: async () => {
@@ -241,8 +244,11 @@ describe("compact tool validation with real sessions", () => {
 
           expect(result.output).toContain("Generated summaries for 2 range")
           expect(result.output).toContain("4 messages")
-          expect(result.metadata.rangeCount).toBe(2)
-          expect(result.metadata.totalMessages).toBe(4)
+          expect(isExecuteMetadata(result.metadata)).toBe(true)
+          if (isExecuteMetadata(result.metadata)) {
+            expect(result.metadata.rangeCount).toBe(2)
+            expect(result.metadata.totalMessages).toBe(4)
+          }
 
           await Session.remove(session.id)
         },
@@ -251,7 +257,7 @@ describe("compact tool validation with real sessions", () => {
   })
 
   test("rejects messages in wrong chronological order", async () => {
-    await withSandbox(async ({ Instance, Session, CompactTool }) => {
+    await withSandbox(async ({ Instance, Session, CompactTool, isExecuteMetadata }) => {
       await Instance.provide({
         directory: projectRoot,
         fn: async () => {
@@ -325,7 +331,7 @@ describe("compact tool validation with real sessions", () => {
   })
 
   test("rejects archived start message", async () => {
-    await withSandbox(async ({ Instance, Session, CompactTool }) => {
+    await withSandbox(async ({ Instance, Session, CompactTool, isExecuteMetadata }) => {
       await Instance.provide({
         directory: projectRoot,
         fn: async () => {
@@ -404,7 +410,7 @@ describe("compact tool validation with real sessions", () => {
   })
 
   test("rejects archived end message", async () => {
-    await withSandbox(async ({ Instance, Session, CompactTool }) => {
+    await withSandbox(async ({ Instance, Session, CompactTool, isExecuteMetadata }) => {
       await Instance.provide({
         directory: projectRoot,
         fn: async () => {
@@ -479,7 +485,7 @@ describe("compact tool validation with real sessions", () => {
   })
 
   test("allows archived messages in middle of range (edge case per spec)", async () => {
-    await withSandbox(async ({ Instance, Session, CompactTool }) => {
+    await withSandbox(async ({ Instance, Session, CompactTool, isExecuteMetadata }) => {
       await Instance.provide({
         directory: projectRoot,
         fn: async () => {
@@ -567,7 +573,10 @@ describe("compact tool validation with real sessions", () => {
           // Should succeed because only start/end archive status matters
           expect(result.output).toContain("Generated summaries for 1 range")
           expect(result.output).toContain("3 messages")
-          expect(result.metadata.totalMessages).toBe(3)
+          expect(isExecuteMetadata(result.metadata)).toBe(true)
+          if (isExecuteMetadata(result.metadata)) {
+            expect(result.metadata.totalMessages).toBe(3)
+          }
 
           await Session.remove(session.id)
         },
@@ -576,7 +585,7 @@ describe("compact tool validation with real sessions", () => {
   })
 
   test("handles single-message range (no endMessageId)", async () => {
-    await withSandbox(async ({ Instance, Session, CompactTool }) => {
+    await withSandbox(async ({ Instance, Session, CompactTool, isExecuteMetadata }) => {
       await Instance.provide({
         directory: projectRoot,
         fn: async () => {
@@ -617,7 +626,10 @@ describe("compact tool validation with real sessions", () => {
           }, ctx)
 
           expect(result.output).toContain("1 message")
-          expect(result.metadata.totalMessages).toBe(1)
+          expect(isExecuteMetadata(result.metadata)).toBe(true)
+          if (isExecuteMetadata(result.metadata)) {
+            expect(result.metadata.totalMessages).toBe(1)
+          }
 
           await Session.remove(session.id)
         },
@@ -629,7 +641,7 @@ describe("compact tool validation with real sessions", () => {
 
 describe("compact tool summarization error handling", () => {
   test("gracefully handles model lookup failure with error in output", async () => {
-    await withSandbox(async ({ Instance, Session, CompactTool }) => {
+    await withSandbox(async ({ Instance, Session, CompactTool, isExecuteMetadata }) => {
       await Instance.provide({
         directory: projectRoot,
         fn: async () => {
@@ -700,8 +712,11 @@ describe("compact tool summarization error handling", () => {
           expect(result.output).toContain("Note:") // Error note present
 
           // Metadata should contain error info
-          expect(result.metadata.error).toBeDefined()
-          expect(result.metadata.summaries).toEqual({}) // Empty due to failure
+          expect(isExecuteMetadata(result.metadata)).toBe(true)
+          if (isExecuteMetadata(result.metadata)) {
+            expect(result.metadata.error).toBeDefined()
+            expect(result.metadata.summaries).toEqual({}) // Empty due to failure
+          }
 
           await Session.remove(session.id)
         },
@@ -710,7 +725,7 @@ describe("compact tool summarization error handling", () => {
   })
 
   test("reports no model info when session has no assistant messages", async () => {
-    await withSandbox(async ({ Instance, Session, CompactTool }) => {
+    await withSandbox(async ({ Instance, Session, CompactTool, isExecuteMetadata }) => {
       await Instance.provide({
         directory: projectRoot,
         fn: async () => {
@@ -753,7 +768,10 @@ describe("compact tool summarization error handling", () => {
           // Should succeed but note missing model info
           expect(result.output).toContain("Generated summaries for 1 range")
           expect(result.output).toContain("No model information available")
-          expect(result.metadata.error).toContain("No model information available")
+          expect(isExecuteMetadata(result.metadata)).toBe(true)
+          if (isExecuteMetadata(result.metadata)) {
+            expect(result.metadata.error).toContain("No model information available")
+          }
 
           await Session.remove(session.id)
         },
