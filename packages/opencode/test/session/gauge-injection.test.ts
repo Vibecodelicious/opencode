@@ -60,16 +60,21 @@ function createAssistantMessage(parts: MessageV2.Part[], tokens: MessageV2.Assis
 
 describe("Context gauge thresholds", () => {
   test("ramping intervals move forward with utilization", () => {
-    expect(SessionCompaction.getNextCheckpointPercent(0)).toBeCloseTo(0.3)
-    expect(SessionCompaction.getNextCheckpointPercent(0.3)).toBeCloseTo(0.45)
+    // First threshold is at 12% (interval 0.12), then 24%, then 30%+ follows upper bounds
+    expect(SessionCompaction.getNextCheckpointPercent(0)).toBeCloseTo(0.12)
+    expect(SessionCompaction.getNextCheckpointPercent(0.12)).toBeCloseTo(0.24)
+    expect(SessionCompaction.getNextCheckpointPercent(0.24)).toBeCloseTo(0.36) // 0.24 < 0.3, so +0.12
+    expect(SessionCompaction.getNextCheckpointPercent(0.3)).toBeCloseTo(0.45) // 0.3 < 0.6, so +0.15
     expect(SessionCompaction.getNextCheckpointPercent(0.6)).toBeCloseTo(0.7)
     expect(SessionCompaction.getNextCheckpointPercent(0.8)).toBeCloseTo(0.85)
     expect(SessionCompaction.getNextCheckpointPercent(0.95)).toBe(1)
   })
 
   test("new gauge only fires on threshold crossing", () => {
-    expect(SessionCompaction.shouldTriggerContextGauge(0.299, 0)).toBe(false)
-    expect(SessionCompaction.shouldTriggerContextGauge(0.3, 0)).toBe(true)
+    // First threshold is at 12%
+    expect(SessionCompaction.shouldTriggerContextGauge(0.11, 0)).toBe(false)
+    expect(SessionCompaction.shouldTriggerContextGauge(0.12, 0)).toBe(true)
+    expect(SessionCompaction.shouldTriggerContextGauge(0.14, 0)).toBe(true) // Above 12%, should trigger
     expect(SessionCompaction.shouldTriggerContextGauge(0.5, 0.45)).toBe(false)
     expect(SessionCompaction.shouldTriggerContextGauge(0.6, 0.45)).toBe(true)
     expect(SessionCompaction.shouldTriggerContextGauge(0.5, 0.6)).toBe(false)
@@ -143,8 +148,9 @@ describe("injectContextGauge", () => {
       return Promise.resolve(part)
     }) as typeof Session.updatePart)
 
+    // Use 120 tokens out of 1000 = 12%, which should trigger first threshold
     const assistantMessage = createAssistantMessage([], {
-      input: 300,
+      input: 120,
       output: 0,
       reasoning: 0,
       cache: { read: 0, write: 0 },
@@ -160,8 +166,8 @@ describe("injectContextGauge", () => {
     expect(inserted).toBe(true)
     expect(calls).toHaveLength(1)
     expect(calls[0].type).toBe("context-gauge")
-    expect((calls[0] as MessageV2.ContextGaugePart).tokenCount).toBe(300) // uses provider-reported input tokens for this turn
-    expect((calls[0] as MessageV2.ContextGaugePart).percentage).toBe(30)
+    expect((calls[0] as MessageV2.ContextGaugePart).tokenCount).toBe(120) // uses provider-reported input tokens for this turn
+    expect((calls[0] as MessageV2.ContextGaugePart).percentage).toBe(12)
 
     spy.mockRestore()
   })
