@@ -134,15 +134,86 @@ describe("injectContextGauge", () => {
     limit: { context: 1000, output: 0 },
   } as unknown as ModelsDev.Model
 
-  test("triggers when current usage crosses threshold using per-turn tokens only", async () => {
+  test("triggers when current usage crosses threshold using full token sum", async () => {
     const calls: MessageV2.Part[] = []
     const spy = spyOn(Session, "updatePart")
-    spy.mockImplementation(((input: MessageV2.Part | { part: MessageV2.TextPart | MessageV2.ReasoningPart; delta: string }) => {
+    spy.mockImplementation(((
+      input: MessageV2.Part | { part: MessageV2.TextPart | MessageV2.ReasoningPart; delta: string },
+    ) => {
       const part = "delta" in input ? input.part : input
       calls.push(part)
       return Promise.resolve(part)
     }) as typeof Session.updatePart)
 
+    // Total = 150 + 50 + 20 + 40 + 40 = 300 tokens = 30% of 1000 limit
+    const assistantMessage = createAssistantMessage([], {
+      input: 150,
+      output: 50,
+      reasoning: 20,
+      cache: { read: 40, write: 40 },
+    })
+
+    const inserted = await SessionCompaction.injectContextGauge({
+      sessionID: baseSession.id,
+      message: assistantMessage.info as MessageV2.Assistant,
+      model,
+      messages: [],
+    })
+
+    expect(inserted).toBe(true)
+    expect(calls).toHaveLength(1)
+    expect(calls[0].type).toBe("context-gauge")
+    // tokenCount should be the sum of all token fields: input + output + reasoning + cache.read + cache.write
+    expect((calls[0] as MessageV2.ContextGaugePart).tokenCount).toBe(300)
+    expect((calls[0] as MessageV2.ContextGaugePart).percentage).toBe(30)
+
+    spy.mockRestore()
+  })
+
+  test("does not trigger when below threshold", async () => {
+    const calls: MessageV2.Part[] = []
+    const spy = spyOn(Session, "updatePart")
+    spy.mockImplementation(((
+      input: MessageV2.Part | { part: MessageV2.TextPart | MessageV2.ReasoningPart; delta: string },
+    ) => {
+      const part = "delta" in input ? input.part : input
+      calls.push(part)
+      return Promise.resolve(part)
+    }) as typeof Session.updatePart)
+
+    // Total = 100 + 50 = 150 tokens = 15% of 1000 limit (below 30% threshold)
+    const assistantMessage = createAssistantMessage([], {
+      input: 100,
+      output: 50,
+      reasoning: 0,
+      cache: { read: 0, write: 0 },
+    })
+
+    const inserted = await SessionCompaction.injectContextGauge({
+      sessionID: baseSession.id,
+      message: assistantMessage.info as MessageV2.Assistant,
+      model,
+      messages: [],
+    })
+
+    expect(inserted).toBe(false)
+    expect(calls).toHaveLength(0)
+
+    spy.mockRestore()
+  })
+
+  test("correctly sums tokens even when some fields are zero", async () => {
+    const calls: MessageV2.Part[] = []
+    const spy = spyOn(Session, "updatePart")
+    spy.mockImplementation(((
+      input: MessageV2.Part | { part: MessageV2.TextPart | MessageV2.ReasoningPart; delta: string },
+    ) => {
+      const part = "delta" in input ? input.part : input
+      calls.push(part)
+      return Promise.resolve(part)
+    }) as typeof Session.updatePart)
+
+    // Total = 300 (only input) = 30% of 1000 limit
     const assistantMessage = createAssistantMessage([], {
       input: 300,
       output: 0,
@@ -159,47 +230,8 @@ describe("injectContextGauge", () => {
 
     expect(inserted).toBe(true)
     expect(calls).toHaveLength(1)
-    expect(calls[0].type).toBe("context-gauge")
-    expect((calls[0] as MessageV2.ContextGaugePart).tokenCount).toBe(300) // uses provider-reported input tokens for this turn
+    expect((calls[0] as MessageV2.ContextGaugePart).tokenCount).toBe(300)
     expect((calls[0] as MessageV2.ContextGaugePart).percentage).toBe(30)
-
-    spy.mockRestore()
-  })
-
-  test("does not double count prior assistant usage", async () => {
-    const calls: MessageV2.Part[] = []
-    const spy = spyOn(Session, "updatePart")
-    spy.mockImplementation(((input: MessageV2.Part | { part: MessageV2.TextPart | MessageV2.ReasoningPart; delta: string }) => {
-      const part = "delta" in input ? input.part : input
-      calls.push(part)
-      return Promise.resolve(part)
-    }) as typeof Session.updatePart)
-
-    const history = [
-      createAssistantMessage([], {
-        input: 400,
-        output: 50,
-        reasoning: 0,
-        cache: { read: 0, write: 0 },
-      }),
-    ]
-
-    const assistantMessage = createAssistantMessage([], {
-      input: 100,
-      output: 50,
-      reasoning: 0,
-      cache: { read: 0, write: 0 },
-    })
-
-    const inserted = await SessionCompaction.injectContextGauge({
-      sessionID: baseSession.id,
-      message: assistantMessage.info as MessageV2.Assistant,
-      model,
-      messages: history,
-    })
-
-    expect(inserted).toBe(false)
-    expect(calls).toHaveLength(0)
 
     spy.mockRestore()
   })

@@ -159,7 +159,9 @@ export namespace SessionCompaction {
     if (contextLimit <= 0) return false
 
     const tokens = input.message.tokens
-    const tokenCount = tokens.input
+    // Sum all token fields to match TUI display (sidebar.tsx, header.tsx, desktop/session.tsx).
+    // Consider extracting to shared utility if human reviewers think that's worthwhile.
+    const tokenCount = tokens.input + tokens.output + tokens.reasoning + tokens.cache.read + tokens.cache.write
 
     const currentPercent = Math.min(1, tokenCount / contextLimit)
     const lastCheckpoint = getHighestGaugePercent(input.messages)
