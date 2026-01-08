@@ -155,20 +155,11 @@ export namespace SessionCompaction {
     model: ModelsDev.Model
     messages: MessageV2.WithParts[]
   }) {
-    // Don't inject gauge on first assistant turn - conversation needs at least one completed
-    // exchange to avoid tool_use without tool_result errors when history is sent for summarization
-    const priorAssistantMessages = input.messages.filter(
-      (m) => m.info.role === "assistant" && m.info.id !== input.message.id,
-    )
-    if (priorAssistantMessages.length === 0) return false
-
     const contextLimit = input.model.limit.context || DEFAULT_CONTEXT_LIMIT
     if (contextLimit <= 0) return false
 
     const tokens = input.message.tokens
-    // Sum all token fields to match TUI display (sidebar.tsx, header.tsx, desktop/session.tsx).
-    // Consider extracting to shared utility if human reviewers think that's worthwhile.
-    const tokenCount = tokens.input + tokens.output + tokens.reasoning + tokens.cache.read + tokens.cache.write
+    const tokenCount = tokens.input
 
     const currentPercent = Math.min(1, tokenCount / contextLimit)
     const lastCheckpoint = getHighestGaugePercent(input.messages)

@@ -104,7 +104,7 @@ export function toModelMessageWithIDs(messages: MessageV2.WithParts[]): ModelMes
             continue
           }
 
-          const toolType = `tool-${part.tool ?? "unknown"}` as `tool-${string}`
+          const toolType = (`tool-${part.tool ?? "unknown"}`) as `tool-${string}`
           const toolCallId = part.callID ?? Identifier.ascending("part")
 
           if (part.state.status === "completed") {
@@ -131,7 +131,7 @@ export function toModelMessageWithIDs(messages: MessageV2.WithParts[]): ModelMes
               state: "output-available",
               toolCallId,
               input: part.state.input,
-              output: part.state.time?.compacted ? "[Old tool result content cleared]" : (part.state.output ?? ""),
+              output: part.state.time?.compacted ? "[Old tool result content cleared]" : part.state.output ?? "",
               callProviderMetadata: part.metadata,
             })
           } else if (part.state.status === "error") {
@@ -141,16 +141,6 @@ export function toModelMessageWithIDs(messages: MessageV2.WithParts[]): ModelMes
               toolCallId,
               input: part.state.input,
               errorText: part.state.error ?? "Tool error",
-              callProviderMetadata: part.metadata,
-            })
-          } else if (part.state.status === "pending" || part.state.status === "running") {
-            // Handle incomplete tools to avoid tool_use without tool_result API error
-            assistantMessage.parts.push({
-              type: toolType,
-              state: "output-available",
-              toolCallId,
-              input: part.state.input,
-              output: "[Tool execution was interrupted]",
               callProviderMetadata: part.metadata,
             })
           }

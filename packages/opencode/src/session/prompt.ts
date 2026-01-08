@@ -250,13 +250,7 @@ export namespace SessionPrompt {
     return "pending"
   }
 
-  async function addAssistantNote(input: {
-    sessionID: string
-    agent: string
-    model: MessageV2.User["model"]
-    parentID: string
-    text: string
-  }) {
+  async function addAssistantNote(input: { sessionID: string; agent: string; model: MessageV2.User["model"]; parentID: string; text: string }) {
     const message = await Session.updateMessage({
       id: Identifier.ascending("message"),
       role: "assistant",
@@ -548,7 +542,9 @@ export namespace SessionPrompt {
             agent: lastUser.agent,
             model: lastUser.model,
             parentID: lastUser.id,
-            text: task.auto ? `Automatic compaction completed (${mode} mode).` : `Compaction completed (${mode} mode).`,
+            text: task.auto
+              ? `Automatic compaction completed (${mode} mode).`
+              : `Compaction completed (${mode} mode).`,
           })
         }
         await Session.updatePart({ ...task, resolved: true })
@@ -762,16 +758,15 @@ export namespace SessionPrompt {
           }),
         }),
       )
-      if (result === "stop") {
-        // Only inject gauge when turn is complete, not during tool execution
+      if (result === "continue") {
         await SessionCompaction.injectContextGauge({
           sessionID,
           message: processor.message,
           model: model.info,
           messages: msgs,
         })
-        break
       }
+      if (result === "stop") break
       continue
     }
     SessionCompaction.prune({ sessionID })
