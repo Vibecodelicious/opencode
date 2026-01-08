@@ -139,7 +139,30 @@ describe("injectContextGauge", () => {
     limit: { context: 1000, output: 0 },
   } as unknown as ModelsDev.Model
 
-  test("triggers when current usage crosses threshold using per-turn tokens only", async () => {
+  // Helper to create a prior assistant message for history (with different ID)
+  function createPriorAssistantMessage(): MessageV2.WithParts {
+    return {
+      info: {
+        id: "msg-prior-assistant", // Different ID from current assistant
+        sessionID: baseSession.id,
+        role: "assistant",
+        parentID: "msg-user",
+        modelID: "test-model",
+        providerID: "opencode",
+        mode: "build",
+        path: { cwd: "/tmp", root: "/" },
+        time: {
+          created: baseSession.created - 1000,
+          completed: baseSession.created - 500,
+        },
+        cost: 0,
+        tokens: { input: 50, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+      },
+      parts: [],
+    } satisfies MessageV2.WithParts
+  }
+
+  test("does not trigger on first assistant turn (no prior assistant messages)", async () => {
     const calls: MessageV2.Part[] = []
     const spy = spyOn(Session, "updatePart")
     spy.mockImplementation(((input: MessageV2.Part | { part: MessageV2.TextPart | MessageV2.ReasoningPart; delta: string }) => {
@@ -148,9 +171,9 @@ describe("injectContextGauge", () => {
       return Promise.resolve(part)
     }) as typeof Session.updatePart)
 
-    // Use 120 tokens out of 1000 = 12%, which should trigger first threshold
+    // Even with 30% usage, should not trigger on first turn
     const assistantMessage = createAssistantMessage([], {
-      input: 120,
+      input: 300,
       output: 0,
       reasoning: 0,
       cache: { read: 0, write: 0 },
@@ -160,13 +183,44 @@ describe("injectContextGauge", () => {
       sessionID: baseSession.id,
       message: assistantMessage.info as MessageV2.Assistant,
       model,
-      messages: [],
+      messages: [], // No prior messages
+    })
+
+    expect(inserted).toBe(false)
+    expect(calls).toHaveLength(0)
+
+    spy.mockRestore()
+  })
+
+  test("triggers when current usage crosses threshold using full token sum", async () => {
+    const calls: MessageV2.Part[] = []
+    const spy = spyOn(Session, "updatePart")
+    spy.mockImplementation(((input: MessageV2.Part | { part: MessageV2.TextPart | MessageV2.ReasoningPart; delta: string }) => {
+      const part = "delta" in input ? input.part : input
+      calls.push(part)
+      return Promise.resolve(part)
+    }) as typeof Session.updatePart)
+
+    // Total = 80 + 30 + 10 = 120 tokens = 12% of 1000 limit (should trigger first threshold)
+    const assistantMessage = createAssistantMessage([], {
+      input: 80,
+      output: 30,
+      reasoning: 10,
+      cache: { read: 0, write: 0 },
+    })
+
+    const inserted = await SessionCompaction.injectContextGauge({
+      sessionID: baseSession.id,
+      message: assistantMessage.info as MessageV2.Assistant,
+      model,
+      messages: [createPriorAssistantMessage()], // Has prior assistant message
     })
 
     expect(inserted).toBe(true)
     expect(calls).toHaveLength(1)
     expect(calls[0].type).toBe("context-gauge")
-    expect((calls[0] as MessageV2.ContextGaugePart).tokenCount).toBe(120) // uses provider-reported input tokens for this turn
+    // tokenCount should be the sum of all token fields
+    expect((calls[0] as MessageV2.ContextGaugePart).tokenCount).toBe(120)
     expect((calls[0] as MessageV2.ContextGaugePart).percentage).toBe(12)
 
     spy.mockRestore()
@@ -181,17 +235,13 @@ describe("injectContextGauge", () => {
       return Promise.resolve(part)
     }) as typeof Session.updatePart)
 
-    const history = [
-      createAssistantMessage([], {
-        input: 400,
-        output: 50,
-        reasoning: 0,
-        cache: { read: 0, write: 0 },
-      }),
-    ]
+    // History has 450 tokens, but we only count current message tokens
+    const history = [createPriorAssistantMessage()]
 
+    // Current message: 50 + 50 = 100 tokens = 10% (below 12% threshold)
+    // If we incorrectly counted history (450 + 100 = 550 = 55%), it would trigger
     const assistantMessage = createAssistantMessage([], {
-      input: 100,
+      input: 50,
       output: 50,
       reasoning: 0,
       cache: { read: 0, write: 0 },

@@ -155,14 +155,30 @@ export namespace SessionCompaction {
     model: ModelsDev.Model
     messages: MessageV2.WithParts[]
   }) {
+    // Don't inject gauge on first assistant turn - need at least one prior exchange
+    const priorAssistantMessages = input.messages.filter(
+      (m) => m.info.role === "assistant" && m.info.id !== input.message.id,
+    )
+    if (priorAssistantMessages.length === 0) return false
+
     const contextLimit = input.model.limit.context || DEFAULT_CONTEXT_LIMIT
     if (contextLimit <= 0) return false
 
     const tokens = input.message.tokens
-    const tokenCount = tokens.input
+    // Sum all token fields to match TUI display (sidebar.tsx, header.tsx, desktop/session.tsx)
+    const tokenCount = tokens.input + tokens.output + tokens.reasoning + tokens.cache.read + tokens.cache.write
 
     const currentPercent = Math.min(1, tokenCount / contextLimit)
     const lastCheckpoint = getHighestGaugePercent(input.messages)
+
+    log.info("gauge check", {
+      tokenCount,
+      contextLimit,
+      currentPercent: Math.round(currentPercent * 100),
+      lastCheckpoint: Math.round(lastCheckpoint * 100),
+      shouldTrigger: shouldTriggerContextGauge(currentPercent, lastCheckpoint),
+    })
+
     if (!shouldTriggerContextGauge(currentPercent, lastCheckpoint)) return false
     const part = createContextGaugePart({
       sessionID: input.sessionID,

@@ -143,6 +143,16 @@ export function toModelMessageWithIDs(messages: MessageV2.WithParts[]): ModelMes
               errorText: part.state.error ?? "Tool error",
               callProviderMetadata: part.metadata,
             })
+          } else if (part.state.status === "pending" || part.state.status === "running") {
+            // Handle incomplete tools to avoid tool_use without tool_result API error
+            assistantMessage.parts.push({
+              type: toolType,
+              state: "output-available",
+              toolCallId,
+              input: part.state.input,
+              output: "[Tool execution was interrupted]",
+              callProviderMetadata: part.metadata,
+            })
           }
         }
 

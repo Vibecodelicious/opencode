@@ -523,3 +523,9 @@ The following items were observed during implementation. They are **not** part o
 - **TUI corruption with Claude Opus 4.5**: When using Claude Opus 4.5 model, raw output (API responses, JSON structures) bleeds into the TUI during compaction, corrupting the display. Does not occur with BigPickle model. Likely caused by new compaction code not following OpenCode's established logging/output patterns. **Addressed by Story 5.6.**
 
 - **Archive metadata not stored (DATA LOSS)**: Compaction reports success but fails to store summary and index terms with Claude Opus 4.5. Retrieve tool reports "No summary generated" and original content becomes inaccessible. This is a violation of NFR5 (no data loss), NFR6 (exact retrieval), and NFR8 (atomic operations). Likely shares root cause with TUI corruption - LLM response not being captured correctly. **Addressed by Story 5.7.**
+
+## Backlog
+
+### Code Quality Issues
+
+- **Context gauge code incorrectly placed in compaction.ts**: The context gauge feature (`injectContextGauge`, `shouldTriggerContextGauge`, `getHighestGaugePercent`, `createContextGaugePart`, etc.) was added to `packages/opencode/src/session/compaction.ts`, but this is the wrong location. The gauge injection is called from `prompt.ts` after every assistant response during normal conversation flow - it has nothing to do with auto-compaction (`SessionCompaction.process()`). Additionally, the `process()` function was incorrectly rewritten to use `streamText` directly instead of the upstream `processor.process()` interface, duplicating logic. The file should match `upstream/dev` exactly. The context gauge code should be moved to its own file (e.g., `context-gauge.ts`) or kept inline in `prompt.ts` where it's actually used.
