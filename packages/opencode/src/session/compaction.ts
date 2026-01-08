@@ -88,7 +88,7 @@ export namespace SessionCompaction {
 
   const DEFAULT_CONTEXT_LIMIT = 128_000
   const CONTEXT_GAUGE_THRESHOLDS = [
-    { upper: 0.3, interval: 0.3 },
+    { upper: 0.3, interval: 0.12 },
     { upper: 0.6, interval: 0.15 },
     { upper: 0.8, interval: 0.1 },
     { upper: 1.0, interval: 0.05 },
@@ -250,20 +250,28 @@ export namespace SessionCompaction {
               content: x,
             }),
           ),
+          // Filter out step-start and step-finish parts to avoid breaking Anthropic's
+          // API validation. These metadata parts can appear after tool_use blocks,
+          // which Anthropic rejects (tool_use must be followed by tool_result).
           ...toModelMessageWithIDs(
-            input.messages.filter((m) => {
-              if (m.info.role !== "assistant" || m.info.error === undefined) {
-                return true
-              }
-              if (
-                MessageV2.AbortedError.isInstance(m.info.error) &&
-                m.parts.some((part) => part.type !== "step-start" && part.type !== "reasoning")
-              ) {
-                return true
-              }
+            input.messages
+              .filter((m) => {
+                if (m.info.role !== "assistant" || m.info.error === undefined) {
+                  return true
+                }
+                if (
+                  MessageV2.AbortedError.isInstance(m.info.error) &&
+                  m.parts.some((part) => part.type !== "step-start" && part.type !== "reasoning")
+                ) {
+                  return true
+                }
 
-              return false
-            }),
+                return false
+              })
+              .map((msg) => ({
+                ...msg,
+                parts: msg.parts.filter((p) => p.type !== "step-start" && p.type !== "step-finish"),
+              })),
           ),
           {
             role: "user",
