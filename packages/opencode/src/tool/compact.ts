@@ -471,13 +471,16 @@ Respond in JSON format:
         tools: model.info.tool_call ? {} : undefined,
         messages: [
           ...systemPrompts.map((x): ModelMessage => ({ role: "system", content: x })),
-          // Filter out step-start and step-finish parts to avoid breaking Anthropic's
-          // API validation. These metadata parts can appear after tool_use blocks,
-          // which Anthropic rejects (tool_use must be followed by tool_result).
+          // Filter out parts that can break Anthropic's API validation or aren't needed for summarization:
+          // - step-start/step-finish: metadata parts that can appear after tool_use blocks
+          // - tool: tool invocations can have broken sequences (tool_use without tool_result) when
+          //   messages are archived. Summarization only needs text content, not tool details.
           ...toModelMessageWithIDs(
             input.allMessages.map((msg) => ({
               ...msg,
-              parts: msg.parts.filter((p) => p.type !== "step-start" && p.type !== "step-finish"),
+              parts: msg.parts.filter(
+                (p) => p.type !== "step-start" && p.type !== "step-finish" && p.type !== "tool",
+              ),
             })),
           ),
           {
