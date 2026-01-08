@@ -767,6 +767,16 @@ export namespace MessageV2 {
                 errorText: part.state.error,
                 callProviderMetadata: part.metadata,
               })
+            if (part.state.status === "pending" || part.state.status === "running")
+              // Handle incomplete tools to avoid tool_use without tool_result API error
+              assistantMessage.parts.push({
+                type: ("tool-" + part.tool) as `tool-${string}`,
+                state: "output-available",
+                toolCallId: part.callID,
+                input: part.state.input,
+                output: "[Tool execution was interrupted]",
+                callProviderMetadata: part.metadata,
+              })
           }
           if (part.type === "reasoning") {
             assistantMessage.parts.push({

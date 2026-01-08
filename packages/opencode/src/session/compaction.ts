@@ -155,6 +155,13 @@ export namespace SessionCompaction {
     model: ModelsDev.Model
     messages: MessageV2.WithParts[]
   }) {
+    // Don't inject gauge on first assistant turn - conversation needs at least one completed
+    // exchange to avoid tool_use without tool_result errors when history is sent for summarization
+    const priorAssistantMessages = input.messages.filter(
+      (m) => m.info.role === "assistant" && m.info.id !== input.message.id,
+    )
+    if (priorAssistantMessages.length === 0) return false
+
     const contextLimit = input.model.limit.context || DEFAULT_CONTEXT_LIMIT
     if (contextLimit <= 0) return false
 

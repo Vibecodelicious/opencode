@@ -134,6 +134,61 @@ describe("injectContextGauge", () => {
     limit: { context: 1000, output: 0 },
   } as unknown as ModelsDev.Model
 
+  // Helper to create a prior assistant message for history (gauge requires at least one prior assistant)
+  function createPriorAssistantMessage(): MessageV2.WithParts {
+    return {
+      info: {
+        id: "msg-prior-assistant",
+        sessionID: baseSession.id,
+        role: "assistant",
+        parentID: "msg-user",
+        modelID: "test-model",
+        providerID: "opencode",
+        mode: "build",
+        path: { cwd: "/tmp", root: "/" },
+        time: {
+          created: baseSession.created - 1000,
+          completed: baseSession.created - 500,
+        },
+        cost: 0,
+        tokens: { input: 100, output: 50, reasoning: 0, cache: { read: 0, write: 0 } },
+      },
+      parts: [],
+    }
+  }
+
+  test("does not trigger on first assistant turn (no prior assistant messages)", async () => {
+    const calls: MessageV2.Part[] = []
+    const spy = spyOn(Session, "updatePart")
+    spy.mockImplementation(((
+      input: MessageV2.Part | { part: MessageV2.TextPart | MessageV2.ReasoningPart; delta: string },
+    ) => {
+      const part = "delta" in input ? input.part : input
+      calls.push(part)
+      return Promise.resolve(part)
+    }) as typeof Session.updatePart)
+
+    // Even with 30% usage, should not trigger on first turn
+    const assistantMessage = createAssistantMessage([], {
+      input: 300,
+      output: 0,
+      reasoning: 0,
+      cache: { read: 0, write: 0 },
+    })
+
+    const inserted = await SessionCompaction.injectContextGauge({
+      sessionID: baseSession.id,
+      message: assistantMessage.info as MessageV2.Assistant,
+      model,
+      messages: [], // No prior messages
+    })
+
+    expect(inserted).toBe(false)
+    expect(calls).toHaveLength(0)
+
+    spy.mockRestore()
+  })
+
   test("triggers when current usage crosses threshold using full token sum", async () => {
     const calls: MessageV2.Part[] = []
     const spy = spyOn(Session, "updatePart")
@@ -157,7 +212,7 @@ describe("injectContextGauge", () => {
       sessionID: baseSession.id,
       message: assistantMessage.info as MessageV2.Assistant,
       model,
-      messages: [],
+      messages: [createPriorAssistantMessage()], // Has prior assistant message
     })
 
     expect(inserted).toBe(true)
@@ -193,7 +248,7 @@ describe("injectContextGauge", () => {
       sessionID: baseSession.id,
       message: assistantMessage.info as MessageV2.Assistant,
       model,
-      messages: [],
+      messages: [createPriorAssistantMessage()],
     })
 
     expect(inserted).toBe(false)
@@ -225,7 +280,7 @@ describe("injectContextGauge", () => {
       sessionID: baseSession.id,
       message: assistantMessage.info as MessageV2.Assistant,
       model,
-      messages: [],
+      messages: [createPriorAssistantMessage()],
     })
 
     expect(inserted).toBe(true)
