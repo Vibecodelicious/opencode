@@ -1,121 +1,50 @@
+## This is the "Smart Compaction" fork of the official OpenCode repository
 
-### This is a fork of the official OpenCode repository
+### Why does this fork exist?
 
-The standard readme follows, and at the end is a draft blog post describing what
-this branch is about.
+I'm working on a somewhat significant feature addition: smart compaction. This fork hosts my changes until they're merged upstream.
 
----
+### What is the current state of the Smart Compaction feature?
 
+It appears to function with both Claude and BigPickle models. Right now, it
+needs extended usage to judge whether the expected benefits of the feature come
+through.
 
+### What is the new feature?
 
-<p align="center">
-  <a href="https://opencode.ai">
-    <picture>
-      <source srcset="packages/console/app/src/asset/logo-ornate-dark.svg" media="(prefers-color-scheme: dark)">
-      <source srcset="packages/console/app/src/asset/logo-ornate-light.svg" media="(prefers-color-scheme: light)">
-      <img src="packages/console/app/src/asset/logo-ornate-light.svg" alt="OpenCode logo">
-    </picture>
-  </a>
-</p>
-<p align="center">The AI coding agent built for the terminal.</p>
-<p align="center">
-  <a href="https://opencode.ai/discord"><img alt="Discord" src="https://img.shields.io/discord/1391832426048651334?style=flat-square&label=discord" /></a>
-  <a href="https://www.npmjs.com/package/opencode-ai"><img alt="npm" src="https://img.shields.io/npm/v/opencode-ai?style=flat-square" /></a>
-  <a href="https://github.com/sst/opencode/actions/workflows/publish.yml"><img alt="Build status" src="https://img.shields.io/github/actions/workflow/status/sst/opencode/publish.yml?style=flat-square&branch=dev" /></a>
-</p>
+I'm giving the LLM and the user the ability to surgically remove parts of the context while leaving behind traces of what was removed, including important information that needs to be retained as well as keywords that indicate what topics were covered in the removed context. It also grants the LLM the ability to restore the parts that were removed in case it actually is needed later. This means that ideally, we won't run into the dreaded compaction event that typically leaves the LLM session significantly degraded or even completely useless. It also allows us to remove context "poison" - those bits that seem to continually confuse the LLM causing it to repeat the same mistakes over and over.
 
-[![OpenCode Terminal UI](packages/web/src/assets/lander/screenshot.png)](https://opencode.ai)
+For more information, keep reading - there are sections covering the internals of how it works as well as a draft blog post/announcement.
 
----
+### How Smart Compaction Works
 
-### Installation
+Prerequisite knowledge - you should know the basics of how LLM chat interfaces work - the entire conversation is sent every time, with the new message (or tool call response) appended to the conversation.
 
-```bash
-# YOLO
-curl -fsSL https://opencode.ai/install | bash
+#### It's A Tool Call
 
-# Package managers
-npm i -g opencode-ai@latest        # or bun/pnpm/yarn
-scoop bucket add extras; scoop install extras/opencode  # Windows
-choco install opencode             # Windows
-brew install opencode              # macOS and Linux
-paru -S opencode-bin               # Arch Linux
-mise use --pin -g ubi:sst/opencode # Any OS
-nix run nixpkgs#opencode           # or github:sst/opencode for latest dev branch
-```
+The functionality is provided by a tool called compact (as well as a complementary one called retrieve). Like all tools, it comes with a description that indicates why the tool is useful, when to use it, and how to use it. When I ask for content to be compacted (or retrieved), the LLM realizes the request can be satisfied by this tool.
 
-> [!TIP]
-> Remove versions older than 0.1.x before installing.
+Associating Messages With IDs and the Two Phases
 
-#### Installation Directory
+The compact tool requires two phases.
 
-The install script respects the following priority order for the installation path:
+**Phase 1: Enable message ID visibility**
 
-1. `$OPENCODE_INSTALL_DIR` - Custom installation directory
-2. `$XDG_BIN_DIR` - XDG Base Directory Specification compliant path
-3. `$HOME/bin` - Standard user binary directory (if exists or can be created)
-4. `$HOME/.opencode/bin` - Default fallback
+The first call turns on message IDs so that when the conversation is sent to the model, each message is prefixed with its ID. Originally, I always had message IDs present in the conversation, but the LLM attempted to mimic this format in its responses, hallucinating its own message IDs; this is why the tool requires two separate calls. After turning on message IDs, the tool appends a message like "[message IDs are now visible]". Simply turning on message IDs only configures the local client to prefix the conversation with IDs on the next submission; another round trip to the LLM is needed so it actually sees them. Now the LLM can relate a request like "compact the failed debugging path, but make sure you retain what we learned from it in the summary" to actual message IDs in the conversation.
 
-```bash
-# Examples
-OPENCODE_INSTALL_DIR=/usr/local/bin curl -fsSL https://opencode.ai/install | bash
-XDG_BIN_DIR=$HOME/.local/bin curl -fsSL https://opencode.ai/install | bash
-```
+**Phase 2: Generate summaries and mark messages as archived**
 
-### Agents
+OpenCode already serializes the conversation with message IDs internally. These are the IDs displayed in the TUI and made visible to the LLM in phase 1. In phase 2, the tool sends a separate LLM request with a special system prompt that asks for a summary with specific guidance. Once the LLM responds, the tool sets new properties on the messages: `archive` (containing `summary`, `indexTerms`, `rangeEnd`) on the first message of the range, and `archivedBy` on subsequent messages (pointing to the first message's ID). From that point forward, when OpenCode constructs the conversation to submit to the LLM, it omits archived messages and replaces them with the summary and keywords.
 
-OpenCode includes two built-in agents you can switch between,
-you can switch between these using the `Tab` key.
+**Retrieval**
 
-- **build** - Default, full access agent for development work
-- **plan** - Read-only agent for analysis and code exploration
-  - Denies file edits by default
-  - Asks permission before running bash commands
-  - Ideal for exploring unfamiliar codebases or planning changes
-
-Also, included is a **general** subagent for complex searches and multi-step tasks.
-This is used internally and can be invoked using `@general` in messages.
-
-Learn more about [agents](https://opencode.ai/docs/agents).
-
-### Documentation
-
-For more info on how to configure OpenCode [**head over to our docs**](https://opencode.ai/docs).
-
-### Contributing
-
-If you're interested in contributing to OpenCode, please read our [contributing docs](./CONTRIBUTING.md) before submitting a pull request.
-
-### Building on OpenCode
-
-If you are working on a project that's related to OpenCode and is using "opencode" as a part of its name; for example, "opencode-dashboard" or "opencode-mobile", please add a note to your README to clarify that it is not built by the OpenCode team and is not affiliated with us in anyway.
-
-### FAQ
-
-#### How is this different than Claude Code?
-
-It's very similar to Claude Code in terms of capability. Here are the key differences:
-
-- 100% open source
-- Not coupled to any provider. Although we recommend the models we provide through [OpenCode Zen](https://opencode.ai/zen); OpenCode can be used with Claude, OpenAI, Google or even local models. As models evolve the gaps between them will close and pricing will drop so being provider-agnostic is important.
-- Out of the box LSP support
-- A focus on TUI. OpenCode is built by neovim users and the creators of [terminal.shop](https://terminal.shop); we are going to push the limits of what's possible in the terminal.
-- A client/server architecture. This for example can allow OpenCode to run on your computer, while you can drive it remotely from a mobile app. Meaning that the TUI frontend is just one of the possible clients.
-
-#### What's the other repo?
-
-The other confusingly named repo has no relation to this one. You can [read the story behind it here](https://x.com/thdxr/status/1933561254481666466).
-
----
-
-**Join our community** [Discord](https://discord.gg/opencode) | [X.com](https://x.com/opencode)
-
+The retrieve tool fetches the original content and returns it as a tool result appended to the current context; appending preserves the LLM cache. The archived messages remain archived, but the LLM now has access to the original content for the remainder of that session.
 
 
 ---
+
 
 ### Draft Blog Post
-
 
 
 # Addressing Context Window Issues in Long-Running AI Sessions
@@ -261,3 +190,119 @@ I'll be using this myself and learning as I go. If you're curious, the feature i
 - [Context rot: the emerging challenge | Understanding AI](https://www.understandingai.org/p/context-rot-the-emerging-challenge)
 - [Context Poisoning | Roo Code Documentation](https://docs.roocode.com/advanced-usage/context-poisoning)
 - [Effective context engineering for AI agents | Anthropic](https://www.anthropic.com/engineering/effective-context-engineering-for-ai-agents)
+
+---
+
+
+The standard readme follows, and at the end is a draft blog post describing what
+this branch is about.
+
+
+---
+
+
+
+<p align="center">
+  <a href="https://opencode.ai">
+    <picture>
+      <source srcset="packages/console/app/src/asset/logo-ornate-dark.svg" media="(prefers-color-scheme: dark)">
+      <source srcset="packages/console/app/src/asset/logo-ornate-light.svg" media="(prefers-color-scheme: light)">
+      <img src="packages/console/app/src/asset/logo-ornate-light.svg" alt="OpenCode logo">
+    </picture>
+  </a>
+</p>
+<p align="center">The AI coding agent built for the terminal.</p>
+<p align="center">
+  <a href="https://opencode.ai/discord"><img alt="Discord" src="https://img.shields.io/discord/1391832426048651334?style=flat-square&label=discord" /></a>
+  <a href="https://www.npmjs.com/package/opencode-ai"><img alt="npm" src="https://img.shields.io/npm/v/opencode-ai?style=flat-square" /></a>
+  <a href="https://github.com/sst/opencode/actions/workflows/publish.yml"><img alt="Build status" src="https://img.shields.io/github/actions/workflow/status/sst/opencode/publish.yml?style=flat-square&branch=dev" /></a>
+</p>
+
+[![OpenCode Terminal UI](packages/web/src/assets/lander/screenshot.png)](https://opencode.ai)
+
+---
+
+### Installation
+
+```bash
+# YOLO
+curl -fsSL https://opencode.ai/install | bash
+
+# Package managers
+npm i -g opencode-ai@latest        # or bun/pnpm/yarn
+scoop bucket add extras; scoop install extras/opencode  # Windows
+choco install opencode             # Windows
+brew install opencode              # macOS and Linux
+paru -S opencode-bin               # Arch Linux
+mise use --pin -g ubi:sst/opencode # Any OS
+nix run nixpkgs#opencode           # or github:sst/opencode for latest dev branch
+```
+
+> [!TIP]
+> Remove versions older than 0.1.x before installing.
+
+#### Installation Directory
+
+The install script respects the following priority order for the installation path:
+
+1. `$OPENCODE_INSTALL_DIR` - Custom installation directory
+2. `$XDG_BIN_DIR` - XDG Base Directory Specification compliant path
+3. `$HOME/bin` - Standard user binary directory (if exists or can be created)
+4. `$HOME/.opencode/bin` - Default fallback
+
+```bash
+# Examples
+OPENCODE_INSTALL_DIR=/usr/local/bin curl -fsSL https://opencode.ai/install | bash
+XDG_BIN_DIR=$HOME/.local/bin curl -fsSL https://opencode.ai/install | bash
+```
+
+### Agents
+
+OpenCode includes two built-in agents you can switch between,
+you can switch between these using the `Tab` key.
+
+- **build** - Default, full access agent for development work
+- **plan** - Read-only agent for analysis and code exploration
+  - Denies file edits by default
+  - Asks permission before running bash commands
+  - Ideal for exploring unfamiliar codebases or planning changes
+
+Also, included is a **general** subagent for complex searches and multi-step tasks.
+This is used internally and can be invoked using `@general` in messages.
+
+Learn more about [agents](https://opencode.ai/docs/agents).
+
+### Documentation
+
+For more info on how to configure OpenCode [**head over to our docs**](https://opencode.ai/docs).
+
+### Contributing
+
+If you're interested in contributing to OpenCode, please read our [contributing docs](./CONTRIBUTING.md) before submitting a pull request.
+
+### Building on OpenCode
+
+If you are working on a project that's related to OpenCode and is using "opencode" as a part of its name; for example, "opencode-dashboard" or "opencode-mobile", please add a note to your README to clarify that it is not built by the OpenCode team and is not affiliated with us in anyway.
+
+### FAQ
+
+#### How is this different than Claude Code?
+
+It's very similar to Claude Code in terms of capability. Here are the key differences:
+
+- 100% open source
+- Not coupled to any provider. Although we recommend the models we provide through [OpenCode Zen](https://opencode.ai/zen); OpenCode can be used with Claude, OpenAI, Google or even local models. As models evolve the gaps between them will close and pricing will drop so being provider-agnostic is important.
+- Out of the box LSP support
+- A focus on TUI. OpenCode is built by neovim users and the creators of [terminal.shop](https://terminal.shop); we are going to push the limits of what's possible in the terminal.
+- A client/server architecture. This for example can allow OpenCode to run on your computer, while you can drive it remotely from a mobile app. Meaning that the TUI frontend is just one of the possible clients.
+
+#### What's the other repo?
+
+The other confusingly named repo has no relation to this one. You can [read the story behind it here](https://x.com/thdxr/status/1933561254481666466).
+
+---
+
+**Join our community** [Discord](https://discord.gg/opencode) | [X.com](https://x.com/opencode)
+
+
+
