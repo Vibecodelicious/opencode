@@ -6,9 +6,9 @@ I'm working on a somewhat significant feature addition: smart compaction. This f
 
 ### What is the current state of the Smart Compaction feature?
 
-It appears to function with both Claude and BigPickle models. Right now, it
+It appears to function with ~~both Claude~~ and BigPickle models. Right now, it
 needs extended usage to judge whether the expected benefits of the feature come
-through.
+through. Claude has disabled API use via subscription accounts, and the posted reasoning is related to third-party tools causing errors while they don't have enough diagnostic information. I could continue developing via API kay, but am concerned about getting banned if I continue getting error responses from the Anthropic API while I work through the bug.
 
 ### What is the new feature?
 
