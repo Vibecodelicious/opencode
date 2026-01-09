@@ -14,6 +14,8 @@ through.
 
 I'm giving the LLM and the user the ability to surgically remove parts of the context while leaving behind traces of what was removed, including important information that needs to be retained as well as keywords that indicate what topics were covered in the removed context. It also grants the LLM the ability to restore the parts that were removed in case it actually is needed later. This means that ideally, we won't run into the dreaded compaction event that typically leaves the LLM session significantly degraded or even completely useless. It also allows us to remove context "poison" - those bits that seem to continually confuse the LLM causing it to repeat the same mistakes over and over.
 
+[Screencast_20260106_235140.webm](https://github.com/user-attachments/assets/3bdeeda0-edc8-4678-8165-5475a03d24df)
+
 For more information, keep reading - there are sections covering the internals of how it works as well as a draft blog post/announcement.
 
 ### How Smart Compaction Works
