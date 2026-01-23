@@ -6,13 +6,14 @@ I'm working on a somewhat significant feature addition: smart compaction. This f
 
 ### What is the current state of the Smart Compaction feature?
 
-It appears to function with ~~both Claude~~ and BigPickle models. Right now, it
+It appears to function with ~~Claude~~ OpenAI and BigPickle models. Right now, it
 needs extended usage to judge whether the expected benefits of the feature come
 through.
 
 Once deepeer testing is done, then thorough review and cleanup, followed by rebasing on the latest upstream commit and working with the OpenCode project on how to get this merged upstream.
 
-Claude has disabled API use via subscription accounts, and the posted reasoning is related to third-party tools causing errors while they don't have enough diagnostic information. I could continue developing via API key, but am concerned about getting banned if I continue getting error responses from the Anthropic API while I work through the bug.
+Claude has disabled API use via subscription accounts, and the posted reasoning is related to third-party tools causing errors while they don't have enough diagnostic information. I don't have much motivation to continue adding Claude support unless someone wants to donate Anthropic API costs. Is also welcome PRs if someone else wants to work on Claude support.
+
 
 ### What is the new feature?
 
