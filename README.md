@@ -8,7 +8,7 @@ I'm working on a somewhat significant feature addition: smart compaction. This f
 
 It appears to function with ~~Claude~~ OpenAI and BigPickle models. Right now, it
 needs extended usage to judge whether the expected benefits of the feature come
-through.
+through. Testing so far has revealed that the model is uneager  to do compactions even when the context window is > 70%. I'm continuing to actively use it on projects, tuning the prompt as I go. I'm also planning on trying to put suggestions in the context gauges which show up in the conversation as the context window grows.
 
 Once deepeer testing is done, then thorough review and cleanup, followed by rebasing on the latest upstream commit and working with the OpenCode project on how to get this merged upstream.
 
