@@ -791,9 +791,39 @@ Use this tool when you see a [SMART_ARCHIVED] placeholder and:
 
 ---
 
+### Story 3.3: TUI Tool Renderers for Compact and Retrieve
+
+As a user,
+I want to see meaningful feedback when compact and retrieve tools execute,
+So that I understand what was archived/retrieved without checking logs.
+
+**Acceptance Criteria:**
+
+**Given** the compact tool executes in prepare mode
+**When** I view the TUI
+**Then** I see "⊟ Compact" title with output body showing prepare mode instructions
+
+**Given** the compact tool executes with ranges
+**When** I view the TUI
+**Then** I see "⊟ Compact [N ranges]" with summaries and archival info
+
+**Given** the retrieve tool executes
+**When** I view the TUI
+**Then** I see "↺ Retrieve {archiveId}" with retrieved content displayed
+
+**Technical Notes:**
+- Location: `packages/opencode/src/cli/cmd/tui/routes/session/index.tsx`
+- Follow existing `patch` tool renderer pattern
+- Use type guard for compact metadata (`"rangeCount" in props.metadata`)
+- PRD: `docs/tool-renderer-prd.md`
+
+**Prerequisites:** None (tools already implemented)
+
+---
+
 **Epic 3 Complete**
 
-**Stories Created:** 2
+**Stories Created:** 3
 **FR Coverage:** FR14, FR15, FR16
 **NFRs Addressed:** NFR6 (exact retrieval)
 **Architecture Sections Used:** Retrieval Architecture, Tool Implementation
@@ -1316,6 +1346,31 @@ Likely related to Story 5.6 - if the compaction LLM response is not being proper
 5. Epic 5 enables autonomous compaction (must be done for LLM to select compaction targets)
 
 **Ready for:** Sprint Planning and Development Implementation
+
+---
+
+## Pre-Implementation Test Baseline
+
+**Date:** 2026-01-29
+**Branch:** `surgical_compaction`
+
+### Test Results
+
+```
+bun test v1.3.3 (274e01c7)
+
+ 398 pass
+ 1 skip
+ 0 fail
+ 1252 expect() calls
+Ran 399 tests across 36 files. [6.50s]
+```
+
+### Notes
+
+- All tests passing before implementation begins
+- Any test failures encountered during development of this epic were **not pre-existing** - the test suite was green at the start of work
+- Test command: `cd packages/opencode && bun test`
 
 ---
 
