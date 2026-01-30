@@ -40,6 +40,8 @@ import type { EditTool } from "@/tool/edit"
 import type { PatchTool } from "@/tool/patch"
 import type { WebFetchTool } from "@/tool/webfetch"
 import type { TaskTool } from "@/tool/task"
+import type { CompactTool } from "@/tool/compact"
+import type { RetrieveTool } from "@/tool/retrieve"
 import { useKeyboard, useRenderer, useTerminalDimensions, type BoxProps, type JSX } from "@opentui/solid"
 import { useSDK } from "@tui/context/sdk"
 import { useCommandDialog } from "@tui/component/dialog-command"
@@ -1676,6 +1678,48 @@ ToolRegistry.register<typeof TodoWriteTool>({
                 </text>
               )}
             </For>
+          </box>
+        </Show>
+      </>
+    )
+  },
+})
+
+ToolRegistry.register<typeof CompactTool>({
+  name: "compact",
+  container: "block",
+  render(props) {
+    const { theme } = useTheme()
+    // Type guard: prepare mode returns {}, execute mode has rangeCount
+    const rangeCount = "rangeCount" in props.metadata ? props.metadata.rangeCount : undefined
+    return (
+      <>
+        <ToolTitle icon="⊟" fallback="Compacting..." when={true}>
+          Compact{rangeCount ? ` [${rangeCount} range${rangeCount === 1 ? "" : "s"}]` : ""}
+        </ToolTitle>
+        <Show when={props.output?.trim()}>
+          <box>
+            <text fg={theme.text}>{props.output!.trim()}</text>
+          </box>
+        </Show>
+      </>
+    )
+  },
+})
+
+ToolRegistry.register<typeof RetrieveTool>({
+  name: "retrieve",
+  container: "block",
+  render(props) {
+    const { theme } = useTheme()
+    return (
+      <>
+        <ToolTitle icon="↺" fallback="Retrieving..." when={props.input.archiveId}>
+          Retrieve {props.input.archiveId}
+        </ToolTitle>
+        <Show when={props.output?.trim()}>
+          <box>
+            <text fg={theme.text}>{props.output!.trim()}</text>
           </box>
         </Show>
       </>
