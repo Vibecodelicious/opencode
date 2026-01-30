@@ -171,7 +171,7 @@ export namespace SessionCompaction {
     const currentPercent = Math.min(1, tokenCount / contextLimit)
     const lastCheckpoint = getHighestGaugePercent(input.messages)
 
-    log.info("gauge check", {
+    log.debug("gauge check", {
       tokenCount,
       contextLimit,
       currentPercent: Math.round(currentPercent * 100),
