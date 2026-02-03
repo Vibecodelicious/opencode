@@ -758,6 +758,18 @@ export namespace SessionPrompt {
           }),
         }),
       )
+      log.info("gauge injection check", {
+        sessionID,
+        result,
+        processorMessageID: processor.message.id,
+        processorTokens: {
+          input: processor.message.tokens.input,
+          output: processor.message.tokens.output,
+          reasoning: processor.message.tokens.reasoning,
+          cacheRead: processor.message.tokens.cache.read,
+          cacheWrite: processor.message.tokens.cache.write,
+        },
+      })
       if (result === "continue") {
         await SessionCompaction.injectContextGauge({
           sessionID,

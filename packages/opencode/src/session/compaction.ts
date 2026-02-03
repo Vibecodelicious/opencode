@@ -159,14 +159,43 @@ export namespace SessionCompaction {
     const priorAssistantMessages = input.messages.filter(
       (m) => m.info.role === "assistant" && m.info.id !== input.message.id,
     )
-    if (priorAssistantMessages.length === 0) return false
+    if (priorAssistantMessages.length === 0) {
+      log.info("gauge injection skipped: no prior assistant messages", {
+        sessionID: input.sessionID,
+        messageID: input.message.id,
+        totalMessages: input.messages.length,
+      })
+      return false
+    }
 
     const contextLimit = input.model.limit.context || DEFAULT_CONTEXT_LIMIT
-    if (contextLimit <= 0) return false
+    if (contextLimit <= 0) {
+      log.info("gauge injection skipped: invalid context limit", {
+        sessionID: input.sessionID,
+        messageID: input.message.id,
+        contextLimit,
+        modelLimitContext: input.model.limit.context,
+      })
+      return false
+    }
 
     const tokens = input.message.tokens
     // Sum all token fields to match TUI display (sidebar.tsx, header.tsx, desktop/session.tsx)
     const tokenCount = tokens.input + tokens.output + tokens.reasoning + tokens.cache.read + tokens.cache.write
+
+    log.info("gauge token breakdown", {
+      sessionID: input.sessionID,
+      messageID: input.message.id,
+      tokens: {
+        input: tokens.input,
+        output: tokens.output,
+        reasoning: tokens.reasoning,
+        cacheRead: tokens.cache.read,
+        cacheWrite: tokens.cache.write,
+      },
+      tokenCount,
+      contextLimit,
+    })
 
     const currentPercent = Math.min(1, tokenCount / contextLimit)
     const lastCheckpoint = getHighestGaugePercent(input.messages)
@@ -179,7 +208,17 @@ export namespace SessionCompaction {
       shouldTrigger: shouldTriggerContextGauge(currentPercent, lastCheckpoint),
     })
 
-    if (!shouldTriggerContextGauge(currentPercent, lastCheckpoint)) return false
+    if (!shouldTriggerContextGauge(currentPercent, lastCheckpoint)) {
+      log.info("gauge injection skipped: threshold not crossed", {
+        sessionID: input.sessionID,
+        messageID: input.message.id,
+        currentPercent: Math.round(currentPercent * 100),
+        lastCheckpoint: Math.round(lastCheckpoint * 100),
+        nextCheckpoint: Math.round(getNextCheckpointPercent(lastCheckpoint) * 100),
+        tokenCount,
+      })
+      return false
+    }
     const part = createContextGaugePart({
       sessionID: input.sessionID,
       messageID: input.message.id,
@@ -188,6 +227,14 @@ export namespace SessionCompaction {
       percent: currentPercent,
     })
     await Session.updatePart(part)
+    log.info("gauge part persisted", {
+      partID: part.id,
+      sessionID: part.sessionID,
+      messageID: part.messageID,
+      tokenCount: part.tokenCount,
+      contextLimit: part.contextLimit,
+      percentage: part.percentage,
+    })
     return true
   }
 

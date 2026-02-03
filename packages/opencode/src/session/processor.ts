@@ -248,6 +248,17 @@ export namespace SessionProcessor {
                   input.assistantMessage.finish = value.finishReason
                   input.assistantMessage.cost += usage.cost
                   input.assistantMessage.tokens = usage.tokens
+                  log.info("tokens assigned to assistant message", {
+                    messageID: input.assistantMessage.id,
+                    tokens: {
+                      input: usage.tokens.input,
+                      output: usage.tokens.output,
+                      reasoning: usage.tokens.reasoning,
+                      cacheRead: usage.tokens.cache.read,
+                      cacheWrite: usage.tokens.cache.write,
+                    },
+                    finishReason: value.finishReason,
+                  })
                   await Session.updatePart({
                     id: Identifier.ascending("part"),
                     reason: value.finishReason,
