@@ -8,8 +8,13 @@ import { BunProc } from "../bun"
 import { Instance } from "../project/instance"
 import { Flag } from "../flag/flag"
 
+declare global {
+  const OPENCODE_BUNDLED_PLUGINS: string | undefined
+}
+
 export namespace Plugin {
   const log = Log.create({ service: "plugin" })
+  const isBundled = typeof OPENCODE_BUNDLED_PLUGINS !== "undefined" && OPENCODE_BUNDLED_PLUGINS === "true"
 
   const state = Instance.state(async () => {
     const client = createOpencodeClient({
@@ -27,10 +32,27 @@ export namespace Plugin {
       $: Bun.$,
     }
     const plugins = [...(config.plugin ?? [])]
+
+    // Load default plugins - either bundled or dynamic
     if (!Flag.OPENCODE_DISABLE_DEFAULT_PLUGINS) {
-      plugins.push("opencode-copilot-auth@0.0.7")
-      plugins.push("opencode-anthropic-auth@0.0.3")
+      if (isBundled) {
+        // Use bundled plugins (avoids runtime module resolution issues)
+        const { BUNDLED_PLUGINS } = await import("./bundled")
+        for (const [name, mod] of Object.entries(BUNDLED_PLUGINS)) {
+          log.info("loading bundled plugin", { name })
+          for (const [_name, fn] of Object.entries<PluginInstance>(mod)) {
+            const init = await fn(input)
+            hooks.push(init)
+          }
+        }
+      } else {
+        // Dynamic loading from npm (original behavior)
+        plugins.push("opencode-copilot-auth@0.0.7")
+        plugins.push("opencode-anthropic-auth@0.0.3")
+      }
     }
+
+    // Continue with user-configured plugins (always dynamic)
     for (let plugin of plugins) {
       log.info("loading plugin", { path: plugin })
       if (!plugin.startsWith("file://")) {

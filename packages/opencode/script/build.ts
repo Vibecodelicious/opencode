@@ -17,6 +17,7 @@ import { Script } from "@opencode-ai/script"
 
 const singleFlag = process.argv.includes("--single")
 const skipInstall = process.argv.includes("--skip-install")
+const bundledFlag = process.argv.includes("--bundled")
 
 const allTargets: {
   os: string
@@ -96,6 +97,7 @@ for (const item of targets) {
     item.arch,
     item.avx2 === false ? "baseline" : undefined,
     item.abi === undefined ? undefined : item.abi,
+    bundledFlag ? "bundled" : undefined,
   ]
     .filter(Boolean)
     .join("-")
@@ -128,6 +130,7 @@ for (const item of targets) {
       OTUI_TREE_SITTER_WORKER_PATH: bunfsRoot + workerRelativePath,
       OPENCODE_WORKER_PATH: workerPath,
       OPENCODE_CHANNEL: `'${Script.channel}'`,
+      OPENCODE_BUNDLED_PLUGINS: bundledFlag ? `'true'` : `'false'`,
     },
   })
 

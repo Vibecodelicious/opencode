@@ -18,6 +18,8 @@
     "./*": "./src/*.ts"
   },
   "devDependencies": {
+    "opencode-anthropic-auth": "0.0.3",
+    "opencode-copilot-auth": "0.0.7",
     "@babel/core": "7.28.4",
     "@octokit/webhooks-types": "7.6.1",
     "@parcel/watcher-darwin-arm64": "2.5.1",
