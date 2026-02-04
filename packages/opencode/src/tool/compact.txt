@@ -42,23 +42,45 @@ Use when the user explicitly requests archiving/compacting messages:
 **AUTONOMOUS COMPACTION DECISION:**
 You can proactively decide to compact WITHOUT user request. Monitor the context gauge checkpoints that appear in conversation (format: [CONTEXT GAUGE: X / Y tokens (Z%)]).
 
-When to autonomously compact:
+**PROACTIVE COMPACTION TRIGGERS (any gauge level):**
+Compact IMMEDIATELY when you detect these patterns, regardless of context percentage:
 
-1. **Context gauge >60% utilization** AND you observe:
-   - Large tool outputs (>5000 tokens) whose key insights you've already captured in your responses
-   - Completed discussions where conclusions are documented in context
-   - Verbose file contents whose relevant learnings are preserved in your analysis
-   - Long command outputs whose meaning has been distilled into your working context
+1. **Completed task blocks:** When a unit of work is DONE, compact it:
+   - Bug investigation concluded and fix applied
+   - Plan written and approved
+   - Code review finished
+   - Feature implemented and tested
+   - Research/exploration completed with findings captured
+   - Any task where you've moved on to something different
 
-2. **Context gauge >80% utilization:**
+2. **Project/repo switches:** When conversation shifts to a different codebase or project:
+   - Archive the previous project's context before diving into the new one
+   - The old context is unlikely to be relevant and will clutter working memory
+
+3. **Multiple context gauges seen without compaction:** If you've seen 2+ context gauges in a session and haven't compacted, you're being too conservative. Review completed work and archive it.
+
+**Do not wait for high context utilization to compact completed work.** A 25% context with finished debugging sessions should be compacted. Keeping stale completed work wastes context space that could be used for the current task.
+
+**When to autonomously compact (gauge-based triggers):**
+
+1. **Any gauge level** with completed work:
+   - Compact finished task blocks immediately (see triggers above)
+   - Don't let completed work accumulate waiting for a threshold
+
+2. **Context gauge >50% utilization:**
+   - Actively look for compaction opportunities
+   - Large tool outputs whose insights are captured should be archived
+   - Completed discussions should not remain in raw form
+
+3. **Context gauge >80% utilization:**
    - Strongly consider compacting
    - Prioritize content where learnings are already captured elsewhere
    - Multiple ranges may be appropriate to maximize space
 
-3. **Content detection patterns:**
-   - Voluminous tool outputs: File reads, grep results, command outputs - IF key insights are captured in your responses/thinking
-   - Completed discussions: Feature discussions that concluded, debugging resolved, decisions made and documented
-   - Reference material: Documentation/examples consulted where relevant information is now in working context
+**Content detection patterns:**
+- Voluminous tool outputs: File reads, grep results, command outputs - IF key insights are captured in your responses/thinking
+- Completed discussions: Feature discussions that concluded, debugging resolved, decisions made and documented
+- Reference material: Documentation/examples consulted where relevant information is now in working context
 
 **CRITICAL: Before compacting, verify the learnings are preserved**
 Raw content can be archived when the *meaning* is captured elsewhere:
@@ -70,9 +92,9 @@ Raw content can be archived when the *meaning* is captured elsewhere:
 Do NOT compact just because you "read" something - compact when the insights are safe.
 
 **Context gauge interpretation:**
-- <30%: No compaction needed
-- 30-60%: Monitor; compact only if very large outputs with learnings already captured
-- 60-80%: Consider compacting completed discussions where conclusions are documented
+- <30%: Compact completed work; no need to compact ongoing work
+- 30-50%: Compact completed work; monitor ongoing discussions
+- 50-80%: Actively look for compaction opportunities; completed work should already be archived
 - >80%: Strongly consider compacting; prioritize freeing significant space
 
 **LOOP/ITERATION DETECTION:**
