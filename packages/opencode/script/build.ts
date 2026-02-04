@@ -90,17 +90,19 @@ if (!skipInstall) {
   await $`bun install --os="*" --cpu="*" @parcel/watcher@${pkg.dependencies["@parcel/watcher"]}`
 }
 for (const item of targets) {
-  const name = [
+  // Base name for compile target (without bundled suffix)
+  const baseName = [
     pkg.name,
     // changing to win32 flags npm for some reason
     item.os === "win32" ? "windows" : item.os,
     item.arch,
     item.avx2 === false ? "baseline" : undefined,
     item.abi === undefined ? undefined : item.abi,
-    bundledFlag ? "bundled" : undefined,
   ]
     .filter(Boolean)
     .join("-")
+  // Output name includes bundled suffix when --bundled is used
+  const name = bundledFlag ? `${baseName}-bundled` : baseName
   console.log(`building ${name}`)
   await $`mkdir -p dist/${name}/bin`
 
@@ -119,7 +121,7 @@ for (const item of targets) {
     compile: {
       autoloadBunfig: false,
       autoloadDotenv: false,
-      target: name.replace(pkg.name, "bun") as any,
+      target: baseName.replace(pkg.name, "bun") as any,
       outfile: `dist/${name}/bin/opencode`,
       execArgv: [`--user-agent=opencode/${Script.version}`, "--"],
       windows: {},
