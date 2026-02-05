@@ -3,6 +3,7 @@ import type { ModelsDev } from "../../src/provider/models"
 import { Session } from "../../src/session"
 import { MessageV2 } from "../../src/session/message-v2"
 import { SessionCompaction } from "../../src/session/compaction"
+import { Identifier } from "../../src/id/id"
 
 const baseSession = {
   id: "session-1",
@@ -81,43 +82,76 @@ describe("Context gauge thresholds", () => {
   })
 })
 
+// Helper to create an assistant message with a context gauge at the given percentage
+function createAssistantWithGauge(percent: number): MessageV2.WithParts {
+  const msgId = Identifier.ascending("message")
+  return {
+    info: {
+      id: msgId,
+      role: "assistant",
+      sessionID: "test-session",
+      mode: "test",
+      modelID: "test-model",
+      providerID: "test-provider",
+      cost: 0,
+      tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+      time: { created: Date.now() },
+      path: { cwd: "/test", root: "/test" },
+    },
+    parts: [
+      {
+        id: Identifier.ascending("part"),
+        type: "context-gauge",
+        percentage: percent,
+        tokenCount: Math.round(percent * 1000),
+        contextLimit: 100000,
+        sessionID: "test-session",
+        messageID: msgId,
+      },
+    ],
+  }
+}
+
+// Helper to create a compaction summary message with a gauge (for post-compaction reset)
+function createSummaryWithGauge(percent: number): MessageV2.WithParts {
+  const msgId = Identifier.ascending("message")
+  return {
+    info: {
+      id: msgId,
+      role: "assistant",
+      summary: true, // This marks it as a compaction summary
+      sessionID: "test-session",
+      mode: "test",
+      modelID: "test-model",
+      providerID: "test-provider",
+      cost: 0,
+      tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+      time: { created: Date.now() },
+      path: { cwd: "/test", root: "/test" },
+    },
+    parts: [
+      {
+        id: Identifier.ascending("part"),
+        type: "context-gauge",
+        percentage: percent,
+        tokenCount: Math.round(percent * 1000),
+        contextLimit: 100000,
+        sessionID: "test-session",
+        messageID: msgId,
+      },
+    ],
+  }
+}
+
 describe("Gauge metadata helpers", () => {
-  test("highest checkpoint percent reads the largest recorded gauge", () => {
-    const gaugeLow = {
-      id: "gauge-low",
-      sessionID: baseSession.id,
-      messageID: "msg-assistant",
-      type: "context-gauge" as const,
-      tokenCount: 20000,
-      contextLimit: 100000,
-      percentage: 25,
-    }
-    const gaugeHigh = {
-      id: "gauge-high",
-      sessionID: baseSession.id,
-      messageID: "msg-assistant",
-      type: "context-gauge" as const,
-      tokenCount: 45000,
-      contextLimit: 100000,
-      percentage: 45,
-    }
+  test("returns last gauge percent from messages", () => {
     const messages = [
-      createAssistantMessage([gaugeLow], {
-        input: 0,
-        output: 0,
-        reasoning: 0,
-        cache: { read: 0, write: 0 },
-      }),
-      createAssistantMessage([gaugeHigh], {
-        input: 0,
-        output: 0,
-        reasoning: 0,
-        cache: { read: 0, write: 0 },
-      }),
+      createAssistantWithGauge(20),
+      createAssistantWithGauge(45),
+      createAssistantWithGauge(30), // Last but not highest
     ]
-    const before = JSON.stringify(messages)
-    expect(SessionCompaction.getHighestGaugePercent(messages)).toBe(0.45)
-    expect(JSON.stringify(messages)).toBe(before)
+    // Now returns 0.30 (last), not 0.45 (highest)
+    expect(SessionCompaction.getLastGaugePercent(messages)).toBe(0.3)
   })
 
   test("context gauge part rounds percentage and caps at 100", () => {
@@ -131,6 +165,72 @@ describe("Gauge metadata helpers", () => {
     expect(part.percentage).toBe(100)
     expect(part.tokenCount).toBe(999)
     expect(part.contextLimit).toBe(1000)
+  })
+})
+
+describe("getLastGaugePercent", () => {
+  test("returns last gauge, not highest", () => {
+    const messages = [
+      createAssistantWithGauge(60), // Old high
+      createAssistantWithGauge(15), // Post-compaction (most recent)
+    ]
+    expect(SessionCompaction.getLastGaugePercent(messages)).toBe(0.15)
+  })
+
+  test("returns highest during normal growth (last == highest)", () => {
+    const messages = [
+      createAssistantWithGauge(20),
+      createAssistantWithGauge(35),
+      createAssistantWithGauge(50),
+    ]
+    // During normal growth, last == highest
+    expect(SessionCompaction.getLastGaugePercent(messages)).toBe(0.5)
+  })
+
+  test("returns 0 when no gauges exist", () => {
+    const messages = [
+      createAssistantMessage([], {
+        input: 0,
+        output: 0,
+        reasoning: 0,
+        cache: { read: 0, write: 0 },
+      }),
+    ]
+    expect(SessionCompaction.getLastGaugePercent(messages)).toBe(0)
+  })
+})
+
+describe("gauge tracking after compaction (integration)", () => {
+  test("post-compaction 0% gauge resets baseline", () => {
+    // Full integration scenario:
+    // 1. Session grows, gauge at 60%
+    // 2. Compaction happens, gauge injected at 0%
+    // 3. getLastGaugePercent should return 0, not 60
+    const messages = [
+      createAssistantWithGauge(60), // Pre-compaction high
+      createSummaryWithGauge(0), // Post-compaction reset
+    ]
+
+    const lastCheckpoint = SessionCompaction.getLastGaugePercent(messages)
+    expect(lastCheckpoint).toBe(0)
+
+    // Next threshold after 0% is 12%
+    expect(SessionCompaction.shouldTriggerContextGauge(0.1, lastCheckpoint)).toBe(false)
+    expect(SessionCompaction.shouldTriggerContextGauge(0.13, lastCheckpoint)).toBe(true)
+  })
+
+  test("without post-compaction gauge, old baseline persists (documents the bug)", () => {
+    // This test documents the OLD buggy behavior that would occur
+    // if Task 3 (inject gauge after compaction) was not implemented
+    const messages = [
+      createAssistantWithGauge(60), // Pre-compaction high, no reset gauge
+    ]
+
+    const lastCheckpoint = SessionCompaction.getLastGaugePercent(messages)
+    expect(lastCheckpoint).toBe(0.6) // Still 60%!
+
+    // Can't trigger at 50% because next threshold is 70%
+    expect(SessionCompaction.shouldTriggerContextGauge(0.5, lastCheckpoint)).toBe(false)
   })
 })
 
