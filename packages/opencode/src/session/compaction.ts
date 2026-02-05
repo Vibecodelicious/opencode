@@ -365,6 +365,26 @@ export namespace SessionCompaction {
         }),
       }),
     )
+
+    // Inject gauge BEFORE the auto-continue check (applies to ALL compactions)
+    if (result === "continue") {
+      // Inject a gauge at 0% to reset tracking baseline
+      const contextLimit = model.info.limit.context || DEFAULT_CONTEXT_LIMIT
+
+      const gaugePart = createContextGaugePart({
+        sessionID: input.sessionID,
+        messageID: msg.id,
+        tokenCount: 0,
+        contextLimit,
+        percent: 0,
+      })
+      await Session.updatePart(gaugePart)
+      log.info("post-compaction gauge injected (baseline reset)", {
+        sessionID: input.sessionID,
+        messageID: msg.id,
+      })
+    }
+
     if (result === "continue" && input.auto) {
       const continueMsg = await Session.updateMessage({
         id: Identifier.ascending("message"),
