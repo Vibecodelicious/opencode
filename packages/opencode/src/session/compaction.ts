@@ -382,6 +382,10 @@ export namespace SessionCompaction {
       log.info("post-compaction gauge injected (baseline reset)", {
         sessionID: input.sessionID,
         messageID: msg.id,
+        partID: gaugePart.id,
+        tokenCount: gaugePart.tokenCount,
+        contextLimit: gaugePart.contextLimit,
+        percentage: gaugePart.percentage,
       })
     }
 
