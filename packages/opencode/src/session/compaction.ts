@@ -115,17 +115,20 @@ export namespace SessionCompaction {
     return currentPercent >= nextCheckpoint
   }
 
-  export function getHighestGaugePercent(messages: MessageV2.WithParts[]) {
-    let highest = 0
+  export function getLastGaugePercent(messages: MessageV2.WithParts[]) {
+    // ASSUMPTION: messages are provided in chronological order (earliest to latest)
+    // This is guaranteed by Session.messages() which reverses the backwards stream from MessageV2.stream()
+    let last = 0
     for (const message of messages) {
       for (const part of message.parts) {
         if (part.type === "context-gauge") {
-          const decimal = Math.max(0, Math.min(1, part.percentage / 100))
-          highest = Math.max(highest, decimal)
+          // Return the most recent gauge, not the highest
+          // This allows gauge tracking to reset after compaction
+          last = Math.max(0, Math.min(1, part.percentage / 100))
         }
       }
     }
-    return highest
+    return last
   }
 
   export function createContextGaugePart(input: {
@@ -198,7 +201,7 @@ export namespace SessionCompaction {
     })
 
     const currentPercent = Math.min(1, tokenCount / contextLimit)
-    const lastCheckpoint = getHighestGaugePercent(input.messages)
+    const lastCheckpoint = getLastGaugePercent(input.messages)
 
     log.info("gauge check", {
       tokenCount,
