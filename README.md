@@ -1,18 +1,16 @@
-## This is the "Smart Compaction" fork of the official OpenCode repository
+## This is the "Context Bonsai" fork of the official OpenCode repository
 
 ### Why does this fork exist?
 
-I'm working on a somewhat significant feature addition: smart compaction. This fork hosts my changes until they're merged upstream.
+I'm working on a somewhat significant feature addition: the ability for users and the LLM itself to edit the context. This fork hosts my changes until they're merged upstream.
 
-### What is the current state of the Smart Compaction feature?
+### What is the current state of the Context Bonsai feature?
 
-It appears to function with ~~Claude~~ OpenAI and BigPickle models. Right now, it
-needs extended usage to judge whether the expected benefits of the feature come
-through. Testing so far has revealed that the model is uneager  to do compactions even when the context window is > 70%. I'm continuing to actively use it on projects, tuning the prompt as I go. I'm also planning on trying to put suggestions in the context gauges which show up in the conversation as the context window grows.
+It appears to function with Claude, OpenAI, BigPickle, Amd Kimi models. Right now, it needs extended usage to judge whether the expected benefits of the feature come through. Testing so far has revealed that the model is uneager to do compactions even when the context window is > 70%. I'm continuing to actively use it on projects. Thats my focus now - I'm tuning the tool card and system reminders as I go.
 
-Once deepeer testing is done, then thorough review and cleanup, followed by rebasing on the latest upstream commit and working with the OpenCode project on how to get this merged upstream.
+Once deeper testing is done, then thorough review and cleanup, followed by rebasing on the latest upstream commit and working with the OpenCode project on how to get this merged upstream.
 
-Claude has disabled API use via subscription accounts, and the posted reasoning is related to third-party tools causing errors while they don't have enough diagnostic information. I don't have much motivation to continue adding Claude support unless someone wants to donate Anthropic API costs. Is also welcome PRs if someone else wants to work on Claude support.
+Claude has disabled API use of third party tools via subscription accounts, which is very demotivating since Claude is my preferred model for most work. I also have used tweakcc to add this to Claude Code, but now theyre rejecting that as "third party" as well.
 
 
 ### What is the new feature?
@@ -23,7 +21,7 @@ I'm giving the LLM and the user the ability to surgically remove parts of the co
 
 For more information, keep reading - there are sections covering the internals of how it works as well as a draft blog post/announcement.
 
-### How Smart Compaction Works
+### How Context Bondai Works
 
 Prerequisite knowledge - you should know the basics of how LLM chat interfaces work - the entire conversation is sent every time, with the new message (or tool call response) appended to the conversation.
 
