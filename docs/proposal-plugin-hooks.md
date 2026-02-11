@@ -321,7 +321,7 @@ This is strictly better than the current `Session.updateMessage` contract (which
 **What `addPart` guarantees:**
 - Delegates to `Session.updatePart()` (`session/index.ts:379-388`), which writes via `Storage.write` and publishes `MessageV2.Event.PartUpdated`. This is the same path used by the TUI and internal tools.
 - Part types are not constrained — plugins can create custom part types. The TUI will render unrecognized types as text fallbacks.
-- **Scope limitation:** `addPart()` is only available during tool execution (via `ToolContext`). It does **not** solve event-time writes — a plugin observing `message.updated` via the `event` hook cannot call `addPart()` because there is no `ToolContext` at that point. This is the root cause of the context gauge gap documented in the feasibility analysis.
+- **Scope limitation:** `addPart()` is only available during tool execution (via `ToolContext`), not during event handling.
 
 ---
 

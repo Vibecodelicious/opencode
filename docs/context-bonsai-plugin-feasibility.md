@@ -121,7 +121,7 @@ To move Context Bonsai entirely to a plugin, OpenCode would need two changes (se
    - List all messages in a session
    - Read message content by ID (via `message(id)` to avoid full-list scans)
    - Atomically write `archive`/`archivedBy` metadata to messages
-   - Create new message parts (via `addPart()` — available during tool execution only, does **not** solve event-time writes like context gauge injection)
+   - Create new message parts (via `addPart()` — available during tool execution)
 
 3. **LLM access for summarization** — **Resolved via `ToolContext.session.languageModel` (part of change #2).** The Session API exposes the session's pre-configured `LanguageModel` instance, giving the plugin access to the same model object that OpenCode's own `SessionCompaction.process()` uses (`compaction.ts:242-316`). The plugin imports the Vercel AI SDK (`"ai"` package) and calls `generateText()` directly:
 
