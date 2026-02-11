@@ -114,29 +114,29 @@ The `share-next.ts` change filters `ContextGaugePart` from enterprise sync. No p
 
 ## What Would Be Needed to Make It Fully Plugin-Compatible
 
-To move Context Bonsai entirely to a plugin, OpenCode would need these new plugin hooks:
+To move Context Bonsai entirely to a plugin, OpenCode would need two changes (see `docs/proposal-plugin-hooks.md` for the full proposal):
 
 ### Critical (Feature Won't Work Without These)
 
-1. **`chat.context` / `chat.messages`** — A hook that lets a plugin transform the messages array **after** retrieval from storage but **before** sending to the LLM. This is the single most important missing hook. It would allow the plugin to:
-   - Replace archived messages with placeholders
+1. **`chat.context` hook** — A hook that lets a plugin transform the `WithParts[]` message array **after** retrieval from storage but **before** `toModelMessage()` conversion and `streamText()`. This must operate on `WithParts[]` (not `ModelMessage[]`) because message IDs, part structure, and metadata fields like `archive`/`archivedBy` are lost during `toModelMessage()` conversion. This would allow the plugin to:
+   - Filter out archived messages and inject summary placeholders
    - Skip `archivedBy` messages
    - Prefix message IDs when in compaction mode
-   - Inject context gauge text
+   - Inject any additional context
 
-2. **Session/Storage API access** — Either expose `Session` and `Storage` APIs in `PluginInput`, or provide a `session.messages` hook that gives read/write access to message metadata. The compact tool needs to:
+2. **Session API in `ToolContext`** — Expose read/write access to session messages on the tool execution context. The SDK client only has read-only message endpoints (GET), so this is the *only* write path available to plugins. The `updateMessage` API must use a callback pattern `(draft) => void` that delegates to `Storage.update()` to preserve atomic write-lock semantics. The compact tool needs to:
    - List all messages in a session
    - Read message content by ID
-   - Write `archive`/`archivedBy` metadata to messages
+   - Atomically write `archive`/`archivedBy` metadata to messages
    - Create new message parts
 
-3. **LLM access for summarization** — A way for a plugin tool to make a secondary LLM call with a custom system prompt and the current conversation context. The existing SDK `client` may partially support this, but it would need to handle OAuth credential routing.
+3. **LLM access for summarization** — A way for a plugin tool to make a secondary LLM call with a custom system prompt and the current conversation context. The existing SDK `client` may partially support this via `session.prompt()`, but this needs validation.
 
-### Important (Feature Degraded Without These)
+### Not Needed (Previously Considered)
 
-4. **`session.afterTurn`** — A hook that fires after each assistant turn with access to the assistant message and token usage. This would enable context gauge injection.
+4. **`session.afterTurn` / `session.turn.after`** — Dropped. The existing `event` hook receives `message.updated` events which include the full assistant message with tokens, cost, and model info. A plugin can filter for completed assistant messages to get the same data.
 
-5. **`session.overflow`** — A hook that fires when context overflow is detected, allowing the plugin to handle it instead of the default compaction behavior.
+5. **`session.overflow` / compaction override** — Not needed. If a plugin prunes context via `chat.context`, the API reports lower token usage, and the built-in `isOverflow()` check won't trigger. Built-in compaction acts as a safety net for cases where plugin pruning is insufficient.
 
 ### Nice-to-Have
 
@@ -148,34 +148,38 @@ To move Context Bonsai entirely to a plugin, OpenCode would need these new plugi
 
 ## Feasibility Matrix
 
-| Component | Plugin Today | With New Hooks | Difficulty of New Hooks |
+| Component | Plugin Today | With Proposed Changes | Notes |
 |-----------|:---:|:---:|---|
-| Compact tool (LLM interface) | Partial | Yes | Medium — needs storage API |
-| Retrieve tool (LLM interface) | Partial | Yes | Medium — needs storage API |
-| Archive rendering in context | No | Yes | **High** — new `chat.context` hook |
-| Message ID visibility toggle | No | Yes | **High** — tied to `chat.context` |
-| Context gauge injection | No | Yes | Medium — new `session.afterTurn` hook |
-| Two-phase prepare/execute | No | Yes | Medium — state + `chat.context` |
-| Summarization LLM call | No | Yes | Medium — LLM API in plugin context |
-| Overflow detection | No | Yes | Low — new event/hook |
-| TUI rendering | No | Partial | Low — renderer registration |
-| Auto-compaction modes | No | Yes | Medium — combined hooks |
-| Message schema (archive fields) | No | Partial | Medium — metadata API |
-| Share filtering | No | Yes | Low |
+| Compact tool (LLM interface) | Partial | Yes | `tool` hook (existing) + `session` API (new) |
+| Retrieve tool (LLM interface) | Partial | Yes | `tool` hook (existing) + `session` API (new) |
+| Archive rendering in context | No | Yes | `chat.context` hook on `WithParts[]` (new) |
+| Message ID visibility toggle | No | Yes | Plugin-internal state + `chat.context` |
+| Context gauge display | No | Yes | `event` hook (existing) + `tool` to surface it |
+| Two-phase prepare/execute | No | Yes | Plugin-internal state + `chat.context` |
+| Summarization LLM call | No | Likely | SDK `client.session.prompt()` — needs validation |
+| Overflow detection | No | Yes | Built-in compaction acts as safety net; no override needed |
+| TUI rendering | No | Partial | Nice-to-have — tool results render as text |
+| Auto-compaction modes | No | Yes | Plugin-internal state + `chat.context` + `session` API |
+| Message metadata (archive fields) | No | Yes | Atomic `updateMessage(id, fn)` can set arbitrary fields |
+| Share filtering | No | No | Low priority — avoid adding sensitive parts |
 
 ---
 
 ## Recommended Path Forward
 
-### Option A: Propose New Plugin Hooks to OpenCode (Recommended)
+### Option A: Propose Two Plugin Surface Changes to OpenCode (Recommended)
 
-The **cleanest long-term approach** is to propose 2-3 new hooks to the OpenCode project:
+The **cleanest long-term approach** is to propose 2 targeted changes to the OpenCode project (see `docs/proposal-plugin-hooks.md` for the full proposal):
 
-1. **`chat.context`** — Transform the messages array before LLM submission. This is generally useful beyond Context Bonsai and would benefit the entire plugin ecosystem.
-2. **Storage/Session API in PluginInput** — Let plugins read/write message metadata. Guard with appropriate permissions.
-3. **`session.afterTurn`** — Post-turn hook with token data.
+1. **`chat.context` hook** — Transform the `WithParts[]` message array *before* `toModelMessage()` conversion and `streamText()`. This hook fires early enough that plugins have access to message IDs, part structure, and metadata — the same data structures OpenCode's own compaction uses. This is generally useful beyond Context Bonsai and would benefit the entire plugin ecosystem (RAG, redaction, prompt caching, etc.).
 
-With these three hooks, Context Bonsai could be a fully self-contained plugin. These hooks are architecturally reasonable and don't break OpenCode's design — they fill obvious gaps in the plugin surface area.
+2. **Session API in `ToolContext`** — Expose `messages()`, `message(id)`, `updateMessage(id, fn)`, and `addPart()` on the tool execution context. This is a **hard requirement** because the SDK client only has read-only message endpoints — there is no write path for plugins today. The `updateMessage` API uses a callback pattern `(draft) => void` that delegates to `Storage.update()`, preserving the atomic write-lock semantics used throughout OpenCode's codebase.
+
+A previously considered `session.turn.after` hook was dropped from the proposal — the existing `event` hook already receives `message.updated` events with full token/cost data, making a dedicated post-turn hook redundant.
+
+Similarly, an overflow/compaction override hook is not needed. If a plugin prunes context effectively via `chat.context`, the API reports lower token usage, and `isOverflow()` won't trigger on the next turn. Built-in compaction serves as a safety net, not a conflict.
+
+With these two changes (~90 lines, 3 files), Context Bonsai could be a fully self-contained plugin. Both changes are architecturally reasonable, additive, and follow existing hook conventions.
 
 **Risk:** The OpenCode team may not want to stabilize these APIs, since the plugin system is relatively new.
 
@@ -195,6 +199,8 @@ Continue maintaining Context Bonsai as a fork. The feature is deeply integrated 
 
 ## Conclusion
 
-Context Bonsai's value comes primarily from **modifying how the conversation is constructed before being sent to the LLM** — and this is exactly what the plugin system doesn't support. The tools (compact/retrieve) are the user-facing surface, but the machinery behind them requires deep integration with the message pipeline, storage layer, and session processing loop.
+Context Bonsai's value comes primarily from **modifying how the conversation is constructed before being sent to the LLM** — and this is exactly what the plugin system doesn't support today. The tools (compact/retrieve) are the user-facing surface, but the machinery behind them requires access to the message pipeline and storage layer.
 
-The most pragmatic path is **Option A**: propose a `chat.context` hook and Storage API access to the OpenCode project. These are general-purpose improvements that would benefit any plugin wanting to do context manipulation, prompt injection, or message filtering. With those hooks in place, Context Bonsai could be a clean, self-contained plugin with no core modifications.
+The most pragmatic path is **Option A**: propose a `chat.context` hook (on `WithParts[]`, before model conversion) and a Session API in `ToolContext` (with atomic `Storage.update`-backed writes). These are two general-purpose improvements (~90 lines, 3 files) that would benefit any plugin wanting to do context manipulation, prompt injection, or message filtering. With those changes in place, Context Bonsai could be a clean, self-contained plugin with no core modifications.
+
+See `docs/proposal-plugin-hooks.md` for the detailed proposal.

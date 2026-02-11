@@ -4,7 +4,7 @@
 
 OpenCode's plugin system is capable and well-designed, but it has a blind spot: **plugins cannot influence what the LLM sees**. They can add tools, modify parameters, and react to events — but they cannot transform the conversation context itself. This makes an entire category of plugins impossible: context compression, message summarization, RAG injection, prompt caching strategies, conversation branching, and more.
 
-This proposal adds **three narrowly-scoped hooks** that close this gap. Each is broadly useful and follows the existing hook conventions exactly.
+This proposal adds **two narrowly-scoped changes** that close this gap. Each is broadly useful and follows the existing hook conventions exactly.
 
 ---
 
@@ -12,11 +12,18 @@ This proposal adds **three narrowly-scoped hooks** that close this gap. Each is 
 
 ### 1. `chat.context` Hook — Transform Messages Before LLM Submission
 
-**What it does:** Lets plugins transform the `ModelMessage[]` array after OpenCode converts stored messages but before passing them to `streamText()`.
+**What it does:** Lets plugins transform the `WithParts[]` message array *before* OpenCode converts it to model format and passes it to `streamText()`.
+
+**Why `WithParts[]` and not `ModelMessage[]`:** Operating on the internal `WithParts` representation gives plugins access to:
+- **Message IDs** — needed to correlate with storage operations (e.g., marking messages as archived)
+- **Part-level structure** — individual tool calls, reasoning blocks, and text segments, not flattened `content` arrays
+- **Message metadata** — `archive`, `archivedBy`, `tokens`, `cost`, and other fields that are lost after `toModelMessage()` conversion
+
+If the hook fired after `toModelMessage()`, plugins would have to reverse-engineer which `ModelMessage` entries correspond to which stored messages. This is fragile and lossy — message IDs don't survive the conversion. By hooking in *before* conversion, plugins operate on the same data structures that OpenCode's own compaction system uses.
 
 **Why it's general-purpose:**
-- RAG plugins can inject retrieved documents as system/user messages
-- Context compression plugins can summarize or truncate old turns
+- RAG plugins can inject retrieved documents as additional messages
+- Context compression plugins can filter, summarize, or replace old turns
 - Audit plugins can redact sensitive content before it reaches the LLM
 - Prompt engineering plugins can rewrite or annotate messages
 - Caching plugins can restructure messages for optimal cache hit rates
@@ -28,8 +35,9 @@ This proposal adds **three narrowly-scoped hooks** that close this gap. Each is 
 
 /**
  * Transform the messages array before it is sent to the LLM.
- * Called after messages are converted to model format but before streamText().
- * Plugins can filter, reorder, inject, or replace messages.
+ * Called after messages are loaded from storage but before toModelMessage()
+ * conversion and streamText(). Plugins can filter, reorder, inject, or
+ * replace messages. The system prompt array is also provided for modification.
  */
 "chat.context"?: (
   input: {
@@ -39,15 +47,18 @@ This proposal adds **three narrowly-scoped hooks** that close this gap. Each is 
   },
   output: {
     system: string[]
-    messages: ModelMessage[]
+    messages: Array<{
+      info: MessageInfo
+      parts: Part[]
+    }>
   },
 ) => Promise<void>
 ```
 
-**Insertion point** — `packages/opencode/src/session/prompt.ts`, between message conversion and `streamText()`. Currently lines 705-728 are:
+**Insertion point** — `packages/opencode/src/session/prompt.ts`, *before* the existing error-filter + `toModelMessage()` call at lines 705-728. Currently:
 
 ```typescript
-// BEFORE (current code)
+// BEFORE (current code, inside streamText call)
 messages: [
   ...system.map(
     (x): ModelMessage => ({
@@ -56,7 +67,18 @@ messages: [
     }),
   ),
   ...MessageV2.toModelMessage(
-    msgs.filter((m) => { ... }),
+    msgs.filter((m) => {
+      if (m.info.role !== "assistant" || m.info.error === undefined) {
+        return true
+      }
+      if (
+        MessageV2.AbortedError.isInstance(m.info.error) &&
+        m.parts.some((part) => part.type !== "step-start" && part.type !== "reasoning")
+      ) {
+        return true
+      }
+      return false
+    }),
     { compactionModeEnabled: CompactionModeState.get(sessionID) },
   ),
 ],
@@ -66,24 +88,7 @@ Would become:
 
 ```typescript
 // AFTER (proposed change)
-// Build context, then let plugins transform it
-const systemMessages = system
-const modelMessages = MessageV2.toModelMessage(
-  msgs.filter((m) => {
-    if (m.info.role !== "assistant" || m.info.error === undefined) {
-      return true
-    }
-    if (
-      MessageV2.AbortedError.isInstance(m.info.error) &&
-      m.parts.some((part) => part.type !== "step-start" && part.type !== "reasoning")
-    ) {
-      return true
-    }
-    return false
-  }),
-  { compactionModeEnabled: CompactionModeState.get(sessionID) },
-)
-
+// Let plugins transform messages before model conversion
 const context = await Plugin.trigger(
   "chat.context",
   {
@@ -92,12 +97,12 @@ const context = await Plugin.trigger(
     model: { providerID: model.providerID, modelID: model.modelID },
   },
   {
-    system: systemMessages,
-    messages: modelMessages,
+    system,
+    messages: msgs,
   },
 )
 
-// Then in streamText():
+// Then in streamText(), convert the (possibly transformed) messages:
 messages: [
   ...context.system.map(
     (x): ModelMessage => ({
@@ -105,92 +110,37 @@ messages: [
       content: x,
     }),
   ),
-  ...context.messages,
+  ...MessageV2.toModelMessage(
+    context.messages.filter((m) => {
+      if (m.info.role !== "assistant" || m.info.error === undefined) {
+        return true
+      }
+      if (
+        MessageV2.AbortedError.isInstance(m.info.error) &&
+        m.parts.some((part) => part.type !== "step-start" && part.type !== "reasoning")
+      ) {
+        return true
+      }
+      return false
+    }),
+    { compactionModeEnabled: CompactionModeState.get(sessionID) },
+  ),
 ],
 ```
 
-**Diff size:** ~20 lines changed in `prompt.ts`, ~10 lines added to `packages/plugin/src/index.ts`.
+**Diff size:** ~20 lines changed in `prompt.ts`, ~15 lines added to `packages/plugin/src/index.ts`.
 
 **Risk:** Low. The hook follows the same `Plugin.trigger()` pattern as `chat.params`. If no plugins use it, behavior is identical — the output object passes through untouched. Plugins that do use it are explicitly opting in to context manipulation, which is no more dangerous than the existing `chat.params` hook that can already set temperature to 2.0.
 
----
-
-### 2. `session.turn.after` Hook — Post-Turn Notification with Token Data
-
-**What it does:** Fires after each assistant turn completes, providing the assistant message, token usage, and model info. Plugins can use this to make decisions, inject metadata, or trigger actions.
-
-**Why it's general-purpose:**
-- Cost tracking / budget enforcement plugins
-- Token usage analytics and alerting
-- Context window monitoring (percentage used)
-- Automatic session management (fork when context is high)
-- Post-turn logging or auditing
-
-**Hook signature:**
-
-```typescript
-// In packages/plugin/src/index.ts, add to Hooks interface:
-
-/**
- * Called after each assistant turn completes (after message is saved).
- * Provides token usage, model info, and the completed message.
- * This is a notification hook — modifications to output are not applied.
- */
-"session.turn.after"?: (
-  input: {
-    sessionID: string
-    agent: string
-    model: { providerID: string; modelID: string }
-    message: {
-      id: string
-      parentID: string
-      tokens: {
-        input: number
-        output: number
-        reasoning: number
-        cache: { read: number; write: number }
-      }
-      cost: number
-      finish: string | undefined
-    }
-    contextLimit: number
-  },
-  output: {},
-) => Promise<void>
-```
-
-**Insertion point** — `packages/opencode/src/session/prompt.ts`, after the context gauge injection at line 768, inside the `if (result === "continue")` block:
-
-```typescript
-// AFTER context gauge injection, add:
-await Plugin.trigger(
-  "session.turn.after",
-  {
-    sessionID,
-    agent: lastUser.agent,
-    model: { providerID: model.providerID, modelID: model.modelID },
-    message: {
-      id: processor.message.id,
-      parentID: processor.message.parentID,
-      tokens: processor.message.tokens,
-      cost: processor.message.cost,
-      finish: processor.message.finish,
-    },
-    contextLimit: model.info.limit.context,
-  },
-  {},
-)
-```
-
-**Diff size:** ~20 lines in `prompt.ts`, ~20 lines in plugin types.
-
-**Risk:** Very low. This is a read-only notification hook. The empty `output` object means plugins can't mutate anything — they can only observe. It follows the same pattern as the `event` hook but with structured, typed data rather than a generic event.
+**Note on `toModelMessage()` and built-in compaction:** The existing error filter and `toModelMessage()` conversion (including `CompactionModeState` handling) remain in place *after* the hook. This means OpenCode's own rendering logic (archive placeholders, message ID prefixing, etc.) still applies to whatever the plugin returns. The plugin operates on the structural level (which messages to include); OpenCode handles the format conversion. If Context Bonsai prunes context effectively via this hook, the token counts reported by the API will stay within limits, and the built-in overflow compaction at `prompt.ts:555-570` won't trigger — it acts as a safety net, not a conflict.
 
 ---
 
-### 3. Expose Session API in `ToolContext` — Let Plugin Tools Read/Write Messages
+### 2. Expose Session API in `ToolContext` — Let Plugin Tools Read/Write Messages
 
 **What it does:** Adds a `session` object to the `ToolContext` that plugin-defined tools receive, giving them read/write access to session messages and parts.
+
+**Why this is a hard requirement, not a convenience:** The SDK client (`PluginInput.client`) only exposes read-only endpoints for messages — `GET /session/{id}/messages` and `GET /session/{id}/message/{messageID}`. There are no PATCH/PUT/POST endpoints for updating message metadata. A plugin tool that needs to write to messages (e.g., marking them as archived) has no path to do so today. The `ToolContext.session` API is the *only* write path available to plugins.
 
 **Why it's general-purpose:**
 - Any tool that needs to reference prior conversation (search tools, citation tools)
@@ -202,16 +152,16 @@ await Plugin.trigger(
 **API surface** (minimal — just what's needed, nothing more):
 
 ```typescript
-// In packages/plugin/src/tool.ts or packages/opencode/src/tool/tool.ts:
+// In packages/plugin/src/tool.ts, update ToolContext:
 
-export type Context<M extends Metadata = Metadata> = {
+export type ToolContext = {
   sessionID: string
   messageID: string
   agent: string
   abort: AbortSignal
   callID?: string
   extra?: { [key: string]: any }
-  metadata(input: { title?: string; metadata?: M }): void
+  metadata(input: { title?: string; metadata?: any }): void
 
   // NEW: Session operations
   session: {
@@ -227,8 +177,17 @@ export type Context<M extends Metadata = Metadata> = {
       parts: Part[]
     } | undefined>
 
-    /** Update message metadata (merge with existing) */
-    updateMessage(id: string, update: Record<string, unknown>): Promise<void>
+    /**
+     * Atomically update a message.
+     *
+     * The callback receives a mutable draft of the message info.
+     * Modifications are applied under a write lock (via Storage.update),
+     * preventing read-then-write races between concurrent operations.
+     *
+     * This matches the pattern used throughout OpenCode's codebase
+     * (Session.update, Storage.update, compact tool's archive logic).
+     */
+    updateMessage(id: string, fn: (draft: MessageInfo) => void): Promise<void>
 
     /** Add a part to a message */
     addPart(part: {
@@ -240,7 +199,7 @@ export type Context<M extends Metadata = Metadata> = {
 }
 ```
 
-**Implementation** — `packages/opencode/src/session/prompt.ts`, in the `resolveTools()` function where tool execution context is built (around line 852). The `session` object would delegate to existing `Session.messages()`, `Session.updateMessage()`, and `Session.updatePart()` functions that already exist:
+**Implementation** — `packages/opencode/src/session/prompt.ts`, in the `resolveTools()` function where tool execution context is built (around line 852). The `session` object delegates to existing internal functions:
 
 ```typescript
 // In the tool execute wrapper, add to the context:
@@ -263,20 +222,18 @@ const result = await item.execute(args, {
       return msgs
     },
     async message(id: string) {
-      const msgs = []
       for await (const msg of MessageV2.stream(input.sessionID)) {
         if (msg.info.id === id) return { info: msg.info, parts: msg.parts }
       }
       return undefined
     },
-    async updateMessage(id: string, update: Record<string, unknown>) {
-      // Fetch, merge, save
-      for await (const msg of MessageV2.stream(input.sessionID)) {
-        if (msg.info.id === id) {
-          await Session.updateMessage({ ...msg.info, ...update } as any)
-          return
-        }
-      }
+    async updateMessage(id: string, fn: (draft: MessageInfo) => void) {
+      // Delegates to Storage.update which acquires Lock.write(),
+      // reads current state, applies the mutation, and writes atomically.
+      await Storage.update(
+        ["message", input.sessionID, id],
+        fn,
+      )
     },
     async addPart(part) {
       await Session.updatePart({
@@ -289,19 +246,18 @@ const result = await item.execute(args, {
 })
 ```
 
+**Why `(draft) => void` instead of `Record<string, unknown>`:** OpenCode's storage layer provides atomic updates via `Storage.update()`, which acquires a write lock, reads the current file, applies a mutation callback to the in-memory object, and writes it back atomically. A merge-based API (`updateMessage(id, { archive: ... })`) would require a read-then-write sequence outside the lock — a classic race condition. The callback pattern preserves the atomicity guarantees that OpenCode's own compaction code relies on (`compact.ts:649`, `compact.ts:684`).
+
 **Diff size:** ~40 lines in `prompt.ts` (tool context construction), ~15 lines in type definitions.
 
 **Risk:** Medium. Write access to messages is powerful. However:
 - Tools already have `$` (shell access), which is far more dangerous
-- The SDK `client` already exposes session APIs over HTTP
-- This just removes the indirection of tools calling back to their own HTTP server
+- This is the only write path available — the SDK client has no message write endpoints
 - The `permission.ask` hook already exists for plugins that want to gate dangerous operations
-
-**Alternative (lower risk):** Expose only read access initially. Tools could use the SDK `client` (already in `PluginInput`) for writes. But the SDK client goes through HTTP, which is awkward for a tool running in-process.
 
 ---
 
-## What These Three Hooks Enable Together
+## What These Two Changes Enable Together
 
 With only these changes, a plugin can implement:
 
@@ -309,19 +265,19 @@ With only these changes, a plugin can implement:
 |------------|---------------|
 | Custom context compression/summarization | `tool` + `session` API + `chat.context` |
 | RAG / document injection | `tool` + `chat.context` |
-| Context window monitoring | `session.turn.after` |
-| Cost budget enforcement | `session.turn.after` + `tool` |
+| Context window monitoring | `event` (existing — `message.updated` events include tokens) |
+| Cost budget enforcement | `event` (existing) + `tool` |
 | Message annotation/bookmarking | `tool` + `session` API |
 | Conversation search | `tool` + `session` API |
 | Prompt caching optimization | `chat.context` |
 | Content redaction | `chat.context` |
-| Token analytics | `session.turn.after` + `event` |
+| Token analytics | `event` (existing — assistant messages include token/cost data) |
 
 For Context Bonsai specifically:
 - **compact tool** → `tool` hook (existing) + `session` API (new) for reading messages and writing archive metadata
 - **retrieve tool** → `tool` hook (existing) + `session` API (new) for reading archived content
-- **archive rendering** → `chat.context` hook (new) to replace archived messages with placeholders
-- **context gauge** → `session.turn.after` hook (new) to monitor token usage, `tool` to surface it
+- **archive rendering** → `chat.context` hook (new) to filter archived messages and inject summary placeholders
+- **context gauge** → `event` hook (existing) to observe token usage after each turn
 - **compaction mode** → plugin-internal state + `chat.context` to prefix message IDs when active
 
 ---
@@ -330,10 +286,11 @@ For Context Bonsai specifically:
 
 | Omitted | Reason |
 |---------|--------|
-| Message schema changes (new fields on `MessageV2.Info`) | Not needed. Plugins can use `updateMessage()` to store arbitrary metadata on messages via the existing schema's flexibility, or store state externally. The `chat.context` hook handles rendering. |
+| `session.turn.after` hook | Redundant. The existing `event` hook receives `message.updated` events which include the full assistant message with tokens, cost, and model info. A plugin can filter for completed assistant messages to get the same data. Adding a typed convenience hook doesn't justify the API surface. |
+| Overflow/compaction override hook | Not needed. If a plugin prunes context via `chat.context`, the model sees fewer tokens, the API reports lower usage, and `isOverflow()` won't trigger on the next turn. Built-in compaction acts as a safety net for cases where plugin pruning is insufficient — this is desirable, not a conflict. |
+| Message schema changes (new fields on `MessageV2.Info`) | Not needed. The `updateMessage()` callback receives a mutable draft — plugins can set arbitrary fields. The `chat.context` hook can read those fields when deciding how to render messages. No schema changes required. |
 | TUI tool renderer registration | Nice-to-have, not blocking. Tool results already render as text. Custom renderers are a cosmetic improvement that can come later. |
 | Share/export filtering hook | Very niche. Can be handled by not adding sensitive parts in the first place. |
-| Overflow detection hook | The `session.turn.after` hook provides token data — plugins can compute overflow themselves. |
 | System prompt modification hook | Already possible via `AGENTS.md` / `config.instructions`. The `chat.context` hook also provides the `system` array for programmatic modification. |
 | Secondary LLM call API | Plugins already have the SDK `client` which can call `session.prompt()`. For direct `streamText()` access, that's a larger API surface discussion. The SDK client is sufficient for summarization use cases. |
 
@@ -343,10 +300,9 @@ For Context Bonsai specifically:
 
 | Change | Files Modified | Lines Changed (est.) | Complexity |
 |--------|---------------|---------------------|------------|
-| `chat.context` hook | `prompt.ts`, `plugin/src/index.ts` | ~30 | Low — follows `chat.params` pattern exactly |
-| `session.turn.after` hook | `prompt.ts`, `plugin/src/index.ts` | ~40 | Low — notification-only, no mutation |
-| Session API in ToolContext | `prompt.ts`, `tool/tool.ts`, `plugin/src/tool.ts` | ~55 | Medium — delegates to existing `Session` functions |
-| **Total** | **3-5 files** | **~125 lines** | **Low-Medium** |
+| `chat.context` hook | `prompt.ts`, `plugin/src/index.ts` | ~35 | Low — follows `chat.params` pattern exactly |
+| Session API in ToolContext | `prompt.ts`, `plugin/src/tool.ts` | ~55 | Medium — delegates to existing `Storage.update` / `Session` functions |
+| **Total** | **3 files** | **~90 lines** | **Low-Medium** |
 
 All changes are additive. No existing behavior changes. No breaking changes to the plugin API. No new dependencies.
 
@@ -354,10 +310,9 @@ All changes are additive. No existing behavior changes. No breaking changes to t
 
 ## Summary
 
-Three hooks, ~125 lines of code, zero breaking changes. In exchange, OpenCode's plugin system gains the ability to influence what the LLM actually sees — unlocking context management, RAG, compression, and analytics plugins that are currently impossible.
+Two changes, ~90 lines of code, zero breaking changes. In exchange, OpenCode's plugin system gains the ability to influence what the LLM actually sees — unlocking context management, RAG, compression, and analytics plugins that are currently impossible.
 
-| Hook | One-Liner | Pattern |
-|------|-----------|---------|
-| `chat.context` | Transform messages before LLM sees them | Same as `chat.params` |
-| `session.turn.after` | Get notified with token data after each turn | Same as `event` but typed |
-| Session API in `ToolContext` | Let tools read/write session messages | Delegates to existing `Session.*` |
+| Change | One-Liner | Pattern |
+|--------|-----------|---------|
+| `chat.context` | Transform `WithParts[]` messages before model conversion | Same as `chat.params` |
+| Session API in `ToolContext` | Let tools atomically read/write session messages | Delegates to `Storage.update` |
