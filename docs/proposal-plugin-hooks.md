@@ -134,6 +134,8 @@ messages: [
 
 **Note on `toModelMessage()` and built-in compaction:** The existing error filter and `toModelMessage()` conversion (including `CompactionModeState` handling) remain in place *after* the hook. This means OpenCode's own rendering logic (archive placeholders, message ID prefixing, etc.) still applies to whatever the plugin returns. The plugin operates on the structural level (which messages to include); OpenCode handles the format conversion. If Context Bonsai prunes context effectively via this hook, the token counts reported by the API will stay within limits, and the built-in overflow compaction at `prompt.ts:555-570` won't trigger — it acts as a safety net, not a conflict.
 
+**Note on `<system-reminder>` tags:** OpenCode already uses `<system-reminder>`-tagged synthetic text parts to inject system signals into the conversation. The `insertReminders()` function (`prompt.ts:1251-1277`) pushes these onto the last user message for plan mode and build-switch notifications. The system prompts for Claude, Qwen (fallback for all other models), and Polaris explicitly prime the model to attend to these tags. Plugins using `chat.context` should follow the same pattern when injecting signals the model needs to act on (e.g., context gauge checkpoints). The hook fires after `insertReminders()`, so plugin-injected parts appear alongside OpenCode's own reminders.
+
 ---
 
 ### 2. Expose Session API in `ToolContext` — Let Plugin Tools Read/Write Messages
@@ -345,7 +347,7 @@ For Context Bonsai specifically:
 - **compact tool** → `tool` hook (existing) + `session` API (new) for message R/W and `languageModel` for summarization
 - **retrieve tool** → `tool` hook (existing) + `session` API (new) for reading archived content
 - **archive rendering** → `chat.context` hook (new) to filter archived messages and inject summary placeholders
-- **context gauge** → `event` hook (existing) for token data + `chat.context` hook (new) to inject gauge text into conversation as a compaction trigger for the model
+- **context gauge** → `event` hook (existing) for token data + `chat.context` hook (new) to inject `<system-reminder>`-tagged gauge text on the last user message as a compaction trigger for the model
 - **compaction mode** → plugin-internal state + `chat.context` to prefix message IDs when active
 
 ---
