@@ -2,9 +2,9 @@
 
 ## Executive Summary
 
-**Can Context Bonsai be rewritten as a plugin? Mostly — two targeted changes close the core gaps, but reliable summarization likely requires a third primitive (side-effect-free LLM inference).**
+**Can Context Bonsai be rewritten as a plugin? Yes — with two targeted changes to OpenCode's plugin surface area.**
 
-Two proposed changes (`chat.context` hook + Session API in `ToolContext`) close the core gaps for context transformation and message read/write access. However, the summarization path remains a significant caveat: the compact tool's current implementation uses a side-effect-free internal call (`SessionProcessor` + `streamText()` with a hidden `summary: true` message), while a plugin must use `client.session.prompt()`, which always creates a persistent user message (`prompt.ts:202`), runs the full `loop()` including overflow compaction (`prompt.ts:555-570`) and tool resolution (`prompt.ts:613`), and emits events visible to TUI, share/sync, and other plugins. This is not merely a cosmetic difference — summary subcalls can themselves trigger compaction, creating recursive side effects. A plugin can filter the resulting message artifacts via `chat.context` to hide them from the model, but they still persist in session history, appear in system events, and affect share/export semantics (see **Artifact Persistence** caveat below). For a production-quality implementation, a third change — exposing a side-effect-free `infer()` primitive (system + messages → text, no session mutation) — would likely be needed. See `docs/proposal-plugin-hooks.md` for the full proposal.
+Two proposed changes (`chat.context` hook + Session API in `ToolContext`) close the core gaps: context transformation and message read/write access. Summarization — which previously appeared to require a third change — is handled by the plugin making **direct AI SDK calls**. OpenCode plugins are full npm packages loaded via `BunProc.install()` and dynamic `import()` (`plugin/index.ts:14-52`). A plugin can declare `"ai"` and a provider SDK (e.g., `@ai-sdk/anthropic`) as dependencies, read API keys from `process.env`, and call `generateText()` / `streamText()` directly — completely bypassing `client.session.prompt()`. This gives the plugin the same side-effect-free summarization path that the core compact tool uses (`SessionProcessor` + `streamText()`), without requiring any new OpenCode primitives. The `ToolContext.extra` field provides `providerID` and `modelID` (`prompt.ts:857`) so the plugin knows which model the session is using. See `docs/proposal-plugin-hooks.md` for the full proposal.
 
 ---
 
@@ -52,12 +52,12 @@ Each section describes the current plugin gap **and** how the proposed changes r
 
 **Gaps in today's plugin system:**
 - **No access to message storage.** The compact tool needs to read all session messages, iterate over them by ID, and write `archive`/`archivedBy` metadata to specific messages. The plugin `ToolContext` only provides `sessionID`, `messageID`, `agent`, and `abort` — no Storage or Session API.
-- **No side-effect-free LLM call path.** The compact tool makes a secondary `streamText()` call to generate summaries, routed through `SessionProcessor` (creating a temporary `summary: true` assistant message). Plugins have no access to `SessionProcessor` or raw `streamText()`.
+- **No obvious LLM call path.** The compact tool makes a secondary `streamText()` call to generate summaries, routed through `SessionProcessor` (creating a temporary `summary: true` assistant message). Plugins have no access to `SessionProcessor` — but they don't need it (see resolution below).
 - **No way to trigger two-phase flow.** The prepare phase sets `CompactionModeState`, which is an in-memory singleton Map that `toModelMessage()` reads to decide whether to prefix message IDs. A plugin can't set this state or influence `toModelMessage` behavior.
 
 **How the proposal resolves these:**
 - **Storage gap** → Resolved by `ToolContext.session` API. `messages()`, `message(id)`, `updateMessage(id, fn)`, and `addPart()` give plugins full read/write access with atomic semantics.
-- **LLM summarization** → Partially resolved. Plugins can call `client.session.prompt({ system, parts })` for secondary LLM calls with a custom system prompt. However, this is **not equivalent** to the current compact implementation: `session.prompt()` always creates and persists a visible user message (`prompt.ts:965-1240`) then runs the full `loop()`, while the compact tool creates a hidden `summary: true` assistant message and calls `SessionProcessor.process()` + `streamText()` directly (`compact.ts:409-506`). A plugin summarization call via `session.prompt()` would leave a persistent user+assistant message pair in the conversation. This is a workable implementation strategy (the messages could be filtered out in `chat.context`), but it's not side-effect-free — the plugin must accept and manage these artifacts. Alternatively, `client.session.summarize()` triggers the built-in compaction system, which is useful but doesn't allow custom summarization prompts.
+- **LLM summarization** → Resolved via direct AI SDK calls. Plugins are npm packages — they can import `"ai"` and a provider SDK (e.g., `@ai-sdk/anthropic`) as dependencies and call `generateText()` / `streamText()` directly using API keys from `process.env`. The `ToolContext.extra` field provides `providerID` and `modelID` so the plugin knows which model the session is using. This completely bypasses `client.session.prompt()` and its side effects (persistent messages, `loop()` execution, event emission). The result is equivalent to the core compact tool's `SessionProcessor` + `streamText()` path — a side-effect-free inference call with no session mutation.
 - **Two-phase flow** → Resolved by `chat.context` hook. The plugin maintains its own in-memory state and applies message ID prefixing in the hook callback, bypassing `CompactionModeState` entirely.
 
 ### 2. Message Archival Rendering — TODAY: Not feasible → WITH PROPOSAL: Yes
@@ -102,7 +102,7 @@ The `share-next.ts` change filters `ContextGaugePart` from enterprise sync. No p
 
 ## What Would Be Needed to Make It Fully Plugin-Compatible
 
-To move Context Bonsai entirely to a plugin, OpenCode would need two to three changes (see `docs/proposal-plugin-hooks.md` for the full proposal):
+To move Context Bonsai entirely to a plugin, OpenCode would need two changes (see `docs/proposal-plugin-hooks.md` for the full proposal):
 
 ### Critical (Feature Won't Work Without These)
 
@@ -118,16 +118,26 @@ To move Context Bonsai entirely to a plugin, OpenCode would need two to three ch
    - Atomically write `archive`/`archivedBy` metadata to messages
    - Create new message parts (via `addPart()` — available during tool execution only, does **not** solve event-time writes like context gauge injection)
 
-3. **LLM access for summarization** — **Workable via `session.prompt()`, but with significant caveats.** The SDK `client` exposes `session.prompt()` (POST `/session/{id}/message`) which accepts `system?: string` as a full system prompt override — it *replaces* the agent prompt (`prompt.ts:800`), not appends to it. However, `session.prompt()` always persists a user message (`prompt.ts:202`) and runs the full `loop()` — including overflow compaction (`prompt.ts:555-570`) and tool resolution (`prompt.ts:613`). This creates three categories of side effects:
-   - **History pollution:** persistent user+assistant message artifacts in session storage
-   - **Behavioral coupling:** summary subcalls can trigger recursive compaction and tool execution
-   - **System noise:** events emitted to TUI, `event` hooks, and share/sync
+3. **LLM access for summarization** — **Resolved via direct AI SDK calls (no OpenCode changes needed).** OpenCode plugins are full npm packages installed via `BunProc.install()` and loaded via dynamic `import()` (`plugin/index.ts:14-52`). A plugin can declare the Vercel AI SDK (`"ai"`) and a provider SDK (e.g., `@ai-sdk/anthropic`) as dependencies and call `generateText()` / `streamText()` directly:
 
-   Filtering artifacts via `chat.context` hides them from the model but they persist in session history, system events, and share/export (see **Artifact Persistence** caveat in Conclusion). There is also `session.summarize()` (POST `/session/{id}/summarize`), but this triggers the built-in compaction system rather than accepting custom prompts.
+   ```typescript
+   import { generateText } from "ai"
+   import { createAnthropic } from "@ai-sdk/anthropic"
 
-### Likely Needed (For Production-Quality Summarization)
+   // Inside tool execute():
+   const provider = createAnthropic({ apiKey: process.env.ANTHROPIC_API_KEY })
+   const { text } = await generateText({
+     model: provider(ctx.extra.modelID),
+     system: compactionSystemPrompt,
+     messages: messagesToSummarize,
+   })
+   ```
 
-3b. **`infer()` primitive** — A side-effect-free LLM call: `(system: string, messages: ModelMessage[]) → AsyncIterable<string>`. This would wrap `streamText()` without creating session messages, running the loop, or emitting events. The current compact tool already has an equivalent internal path (`SessionProcessor.process()` + `streamText()` with `summary: true`, `compact.ts:409-506`). Without this, plugin summarization *works* but with session-mutating semantics that diverge from the core implementation. This is a ~30-line change but requires exposing a lower-level primitive than the existing plugin surface.
+   This is fully side-effect-free — no session messages created, no `loop()` execution, no events emitted, no recursive compaction risk. The `ToolContext.extra` field provides `providerID` and `modelID` (`prompt.ts:857`) so the plugin can match the session's model. API keys come from `process.env`, the same source OpenCode itself uses.
+
+   **Why not `client.session.prompt()`?** That path always persists a user message (`prompt.ts:202`) and runs the full `loop()` including overflow compaction (`prompt.ts:555-570`) and tool resolution (`prompt.ts:613`). Direct AI SDK calls avoid all of this.
+
+   **Why not a new `infer()` primitive?** Not needed — the plugin already has everything it needs to make its own LLM calls. Adding an `infer()` API would be redundant with what any npm package can already do.
 
 ### Not Needed (Previously Considered)
 
@@ -147,13 +157,13 @@ To move Context Bonsai entirely to a plugin, OpenCode would need two to three ch
 
 | Component | Plugin Today | With Proposed Changes | Notes |
 |-----------|:---:|:---:|---|
-| Compact tool (LLM interface) | Partial | Yes | `tool` hook (existing) + `session` API (new) |
+| Compact tool (LLM interface) | Partial | Yes | `tool` hook (existing) + `session` API (new) + direct AI SDK calls for summarization |
 | Retrieve tool (LLM interface) | Partial | Yes | `tool` hook (existing) + `session` API (new) |
 | Archive rendering in context | No | Yes | `chat.context` hook on `WithParts[]` (new) |
 | Message ID visibility toggle | No | Yes | Plugin-internal state + `chat.context` |
 | Context gauge display | No | Partial | `event` hook for tracking; no way to inject gauge part onto assistant messages outside tool execution |
 | Two-phase prepare/execute | No | Yes | Plugin-internal state + `chat.context` |
-| Summarization LLM call | No | Partial | `session.prompt()` works but is session-mutating (persists messages, can trigger recursive compaction, emits events); artifacts hidden from model via `chat.context` but persist in storage/events/share. Full parity requires `infer()` primitive |
+| Summarization LLM call | No | Yes | Plugin imports AI SDK directly and calls `generateText()` / `streamText()` — fully side-effect-free, no session mutation |
 | Overflow detection | No | Yes | Built-in compaction acts as safety net; no override needed |
 | TUI rendering | No | Partial | Nice-to-have — tool results render as text |
 | Auto-compaction modes | No | Yes | Plugin-internal state + `chat.context` + `session` API |
@@ -164,23 +174,21 @@ To move Context Bonsai entirely to a plugin, OpenCode would need two to three ch
 
 ## Recommended Path Forward
 
-### Option A: Propose Plugin Surface Changes to OpenCode (Recommended)
+### Option A: Propose Two Plugin Surface Changes to OpenCode (Recommended)
 
-The **cleanest long-term approach** is to propose targeted changes to the OpenCode project (see `docs/proposal-plugin-hooks.md` for the full proposal):
+The **cleanest long-term approach** is to propose 2 targeted changes to the OpenCode project (see `docs/proposal-plugin-hooks.md` for the full proposal):
 
 1. **`chat.context` hook** — Transform the `WithParts[]` message array *before* `toModelMessage()` conversion and `streamText()`. This hook fires early enough that plugins have access to message IDs, part structure, and metadata — the same data structures OpenCode's own compaction uses. This is generally useful beyond Context Bonsai and would benefit the entire plugin ecosystem (RAG, redaction, prompt caching, etc.).
 
-2. **Session API in `ToolContext`** — Expose `messages()`, `message(id)`, `updateMessage(id, fn)`, and `addPart()` on the tool execution context. This is a **hard requirement** because the SDK client only has read-only message endpoints — there is no write path for plugins today. The `updateMessage` API uses a callback pattern `(draft) => void` that delegates to `Storage.update()`, preserving the atomic write-lock semantics used throughout OpenCode's codebase. Note: `message(id)` is included as a convenience to avoid full-list scans when the plugin already knows the target message ID (e.g., during archive-by-ID operations). `addPart()` enables part creation during tool execution but does **not** solve the gauge gap (event-time writes remain unavailable).
+2. **Session API in `ToolContext`** — Expose `messages()`, `message(id)`, `updateMessage(id, fn)`, and `addPart()` on the tool execution context. This is a **hard requirement** because the SDK client only has read-only message endpoints — there is no write path for plugins today. The `updateMessage` API uses a callback pattern `(draft) => void` that delegates to `Storage.update()`, preserving the atomic write-lock semantics used throughout OpenCode's codebase, with an identity-field guard that throws if `id`, `sessionID`, `role`, or `parentID` are modified (see proposal for implementation). `message(id)` is included to avoid full-list scans during archive-by-ID operations. `addPart()` enables part creation during tool execution but does **not** solve the gauge gap (event-time writes remain unavailable).
 
-3. **`infer()` primitive (likely needed)** — A side-effect-free LLM call: `(system: string, messages: ModelMessage[]) → AsyncIterable<string>`. Without this, plugin summarization must use `client.session.prompt()`, which runs the full `loop()` — creating persistent messages, potentially triggering recursive compaction, and emitting events visible to TUI, share, and other plugins. The current compact tool avoids all of this via `SessionProcessor.process()` + `streamText()` (`compact.ts:409-506`). Filtering artifacts via `chat.context` hides them from the model but not from session history, events, or share/export (see **Artifact Persistence** caveat in Conclusion). For a production-quality plugin, this third primitive closes the sufficiency gap.
+**Summarization requires no OpenCode changes.** Plugins are full npm packages — they can import the Vercel AI SDK and a provider SDK as dependencies and call `generateText()` / `streamText()` directly using API keys from `process.env`. The `ToolContext.extra` field provides `providerID` and `modelID`. This is fully side-effect-free: no session messages created, no `loop()` execution, no events emitted.
 
-A previously considered `session.turn.after` hook was dropped from the proposal — the existing `event` hook already receives `message.updated` events with full token/cost data, making a dedicated post-turn hook redundant.
+A previously considered `session.turn.after` hook was dropped — the existing `event` hook already receives `message.updated` events with full token/cost data. An overflow/compaction override hook is also unnecessary — effective `chat.context` pruning keeps token counts below thresholds, and built-in compaction serves as a safety net.
 
-Similarly, an overflow/compaction override hook is not needed. If a plugin prunes context effectively via `chat.context`, the API reports lower token usage, and `isOverflow()` won't trigger on the next turn. Built-in compaction serves as a safety net, not a conflict.
+With these two changes (~90 lines, 3 files), Context Bonsai can be a fully self-contained plugin. Both changes are architecturally reasonable, additive, and follow existing hook conventions.
 
-With changes 1 and 2 (~90 lines, 3 files), Context Bonsai's core archival mechanics (context transformation + message read/write) are fully covered. Change 3 would add another ~30 lines but requires exposing an internal LLM call path, which is a larger API commitment. Without change 3, summarization *works* but with session-mutating semantics that diverge from the current core implementation.
-
-**Risk:** The OpenCode team may not want to stabilize these APIs, since the plugin system is relatively new. Change 3 in particular exposes a lower-level primitive than the existing plugin surface.
+**Risk:** The OpenCode team may not want to stabilize these APIs, since the plugin system is relatively new.
 
 ### Option B: Minimal Core Changes + Plugin
 
@@ -200,13 +208,8 @@ Continue maintaining Context Bonsai as a fork. The feature is deeply integrated 
 
 Context Bonsai's value comes primarily from **modifying how the conversation is constructed before being sent to the LLM** — and this is exactly what the plugin system doesn't support today. The tools (compact/retrieve) are the user-facing surface, but the machinery behind them requires access to the message pipeline and storage layer.
 
-The most pragmatic path is **Option A**: propose a `chat.context` hook (on `WithParts[]`, before model conversion), a Session API in `ToolContext` (with atomic `Storage.update`-backed writes), and ideally an `infer()` primitive for side-effect-free LLM calls. The first two changes (~90 lines, 3 files) are general-purpose improvements that would benefit any plugin doing context manipulation, prompt injection, or message filtering. The third change (~30 lines) is narrower but closes the summarization sufficiency gap.
+The most pragmatic path is **Option A**: propose a `chat.context` hook (on `WithParts[]`, before model conversion) and a Session API in `ToolContext` (with atomic `Storage.update`-backed writes). These are two general-purpose improvements (~90 lines, 3 files) that would benefit any plugin doing context manipulation, prompt injection, or message filtering.
 
-**Artifact Persistence caveat:** Without a side-effect-free `infer()` primitive, plugin summarization via `client.session.prompt()` creates persistent user+assistant message pairs that `chat.context` filtering can hide from the model but **cannot remove from**:
-- **Session history** — artifacts remain in storage and appear in message streams (e.g., `MessageV2.stream()`)
-- **System events** — `Bus.publish(MessageV2.Event.Updated)` fires for artifact messages, reaching TUI, `event` plugin hooks, and any subscriber
-- **Share/export** — `share-next.ts` processes all stored messages; artifact messages would be included unless separately filtered
-
-This diverges from the current compact tool's internal path, which creates a hidden `summary: true` assistant message via `SessionProcessor` that never enters the normal message graph. The practical impact: a plugin must defensively tag and filter its own artifacts at multiple system boundaries, whereas the core implementation avoids the problem entirely.
+Summarization — which initially appeared to require a third OpenCode change — is handled entirely by the plugin itself. Since OpenCode plugins are full npm packages (`BunProc.install()` + dynamic `import()`), the plugin can import the Vercel AI SDK and call `generateText()` / `streamText()` directly with API keys from `process.env` and model info from `ToolContext.extra`. This gives the plugin the same side-effect-free inference path that the core compact tool uses, without any new OpenCode primitives. No session messages are created, no `loop()` runs, no events are emitted.
 
 See `docs/proposal-plugin-hooks.md` for the detailed proposal.

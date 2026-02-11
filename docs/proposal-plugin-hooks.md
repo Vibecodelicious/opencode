@@ -310,7 +310,7 @@ With only these changes, a plugin can implement:
 
 | Capability | Which Hook(s) |
 |------------|---------------|
-| Custom context compression/summarization | `tool` + `session` API + `chat.context` |
+| Custom context compression/summarization | `tool` + `session` API + `chat.context` + direct AI SDK calls for summarization |
 | RAG / document injection | `tool` + `chat.context` |
 | Context window monitoring | `event` (existing — `message.updated` events include tokens) |
 | Cost budget enforcement | `event` (existing) + `tool` |
@@ -321,7 +321,7 @@ With only these changes, a plugin can implement:
 | Token analytics | `event` (existing — assistant messages include token/cost data) |
 
 For Context Bonsai specifically:
-- **compact tool** → `tool` hook (existing) + `session` API (new) for reading messages and writing archive metadata
+- **compact tool** → `tool` hook (existing) + `session` API (new) for reading messages and writing archive metadata + direct AI SDK `generateText()` for summarization (no OpenCode changes needed)
 - **retrieve tool** → `tool` hook (existing) + `session` API (new) for reading archived content
 - **archive rendering** → `chat.context` hook (new) to filter archived messages and inject summary placeholders
 - **context gauge** → `event` hook (existing) to observe token usage after each turn
@@ -339,7 +339,7 @@ For Context Bonsai specifically:
 | TUI tool renderer registration | Nice-to-have, not blocking. Tool results already render as text. Custom renderers are a cosmetic improvement that can come later. |
 | Share/export filtering hook | Very niche. Can be handled by not adding sensitive parts in the first place. |
 | System prompt modification hook | Already possible via `AGENTS.md` / `config.instructions`. The `chat.context` hook also provides the `system` array for programmatic modification. |
-| Side-effect-free LLM inference (`infer()`) | **Not yet proposed but likely needed as a third change.** `client.session.prompt({ system })` supports custom system prompts (replaces agent prompt at `prompt.ts:800`), but it always persists a user message (`prompt.ts:202`), runs the full `loop()` including overflow compaction (`prompt.ts:555-570`) and tool resolution (`prompt.ts:613`), and emits events visible to TUI, share, and other plugins. A summary subcall can itself trigger compaction, creating recursive side effects. The current compact tool avoids all of this via `SessionProcessor` + `streamText()` with a hidden `summary: true` message (`compact.ts:409-506`). Filtering artifacts via `chat.context` hides them from the model but they persist in session history, system events, and share/export — a semantic divergence from the core path. For production-quality plugin summarization, an `infer(system, messages) → AsyncIterable<string>` primitive that performs no session mutation would close this gap (~30 additional lines). |
+| Side-effect-free LLM inference (`infer()`) | Not needed. Plugins are full npm packages (`BunProc.install()` + dynamic `import()`) and can import the Vercel AI SDK (`"ai"`, `@ai-sdk/anthropic`, etc.) as dependencies. A plugin tool can call `generateText()` / `streamText()` directly using API keys from `process.env` and model info from `ToolContext.extra` (`{ providerID, modelID }`). This is fully side-effect-free — no session messages, no `loop()`, no events — and equivalent to the core compact tool's internal `SessionProcessor` + `streamText()` path. No OpenCode changes required. |
 
 ---
 
@@ -349,9 +349,7 @@ For Context Bonsai specifically:
 |--------|---------------|---------------------|------------|
 | `chat.context` hook | `prompt.ts`, `plugin/src/index.ts` | ~35 | Low — follows `chat.params` pattern exactly |
 | Session API in ToolContext | `prompt.ts`, `plugin/src/tool.ts` | ~55 | Medium — delegates to existing `Storage.update` / `Session` functions |
-| `infer()` primitive (if needed) | `prompt.ts` or `session/index.ts`, `plugin/src/tool.ts` | ~30 | Medium — wraps `streamText()` without session mutation |
-| **Total (2 changes)** | **3 files** | **~90 lines** | **Low-Medium** |
-| **Total (3 changes)** | **3-4 files** | **~120 lines** | **Medium** |
+| **Total** | **3 files** | **~90 lines** | **Low-Medium** |
 
 All changes are additive. No existing behavior changes. No breaking changes to the plugin API. No new dependencies.
 
@@ -359,10 +357,9 @@ All changes are additive. No existing behavior changes. No breaking changes to t
 
 ## Summary
 
-Two core changes (~90 lines), plus a likely third (~30 lines), zero breaking changes. In exchange, OpenCode's plugin system gains the ability to influence what the LLM actually sees — unlocking context management, RAG, compression, and analytics plugins that are currently impossible.
+Two changes, ~90 lines of code, zero breaking changes. In exchange, OpenCode's plugin system gains the ability to influence what the LLM actually sees — unlocking context management, RAG, compression, and analytics plugins that are currently impossible. Summarization requires no OpenCode changes — plugins can import the Vercel AI SDK directly and make side-effect-free `generateText()` calls.
 
-| Change | One-Liner | Pattern | Status |
-|--------|-----------|---------|--------|
-| `chat.context` | Transform `WithParts[]` messages before model conversion | Same as `chat.params` | Proposed |
-| Session API in `ToolContext` | Let tools atomically read/write session messages | Delegates to `Storage.update` | Proposed |
-| `infer()` primitive | Side-effect-free LLM call for plugin summarization | Wraps `streamText()` | Likely needed |
+| Change | One-Liner | Pattern |
+|--------|-----------|---------|
+| `chat.context` | Transform `WithParts[]` messages before model conversion | Same as `chat.params` |
+| Session API in `ToolContext` | Let tools atomically read/write session messages | Delegates to `Storage.update` |
