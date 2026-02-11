@@ -140,7 +140,7 @@ messages: [
 
 **What it does:** Adds a `session` object to the `ToolContext` that plugin-defined tools receive, giving them read/write access to session messages and parts.
 
-**Why this is a hard requirement, not a convenience:** The SDK client (`PluginInput.client`) only exposes read-only endpoints for messages — `GET /session/{id}/messages` and `GET /session/{id}/message/{messageID}`. There are no PATCH/PUT/POST endpoints for updating message metadata. A plugin tool that needs to write to messages (e.g., marking them as archived) has no path to do so today. The `ToolContext.session` API is the *only* write path available to plugins.
+**Why this is a hard requirement, not a convenience:** The SDK client (`PluginInput.client`) only exposes read-only endpoints for messages — `GET /session/{id}/message` (list) and `GET /session/{id}/message/{messageID}` (single). There are no PATCH/PUT/POST endpoints for updating message metadata. A plugin tool that needs to write to messages (e.g., marking them as archived) has no path to do so today. The `ToolContext.session` API is the *only* write path available to plugins.
 
 **Why it's general-purpose:**
 - Any tool that needs to reference prior conversation (search tools, citation tools)

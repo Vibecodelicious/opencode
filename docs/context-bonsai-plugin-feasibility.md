@@ -142,7 +142,7 @@ To move Context Bonsai entirely to a plugin, OpenCode would need two changes (se
 | Retrieve tool (LLM interface) | Partial | Yes | `tool` hook (existing) + `session` API (new) |
 | Archive rendering in context | No | Yes | `chat.context` hook on `WithParts[]` (new) |
 | Message ID visibility toggle | No | Yes | Plugin-internal state + `chat.context` |
-| Context gauge display | No | Yes | `event` hook (existing) + `tool` to surface it |
+| Context gauge display | No | Partial | `event` hook for tracking; no way to inject gauge part onto assistant messages outside tool execution |
 | Two-phase prepare/execute | No | Yes | Plugin-internal state + `chat.context` |
 | Summarization LLM call | No | Yes* | `client.session.prompt({ system })` works but persists messages; plugin must filter artifacts via `chat.context` |
 | Overflow detection | No | Yes | Built-in compaction acts as safety net; no override needed |
