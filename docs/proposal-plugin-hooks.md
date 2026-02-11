@@ -150,7 +150,6 @@ messages: [
 - Tools that create synthetic message parts (summaries, bookmarks)
 - Tools that need side-effect-free LLM calls (summarization, classification, extraction)
 - Tools that need to fork or branch conversations
-- Tools that request user confirmation before dangerous operations (via `askPermission`)
 - Debugging tools that inspect conversation state
 
 **API surface** (minimal — message R/W + LLM access):
@@ -216,23 +215,6 @@ export type ToolContext = {
      *   })
      */
     languageModel: LanguageModel
-
-    /**
-     * Request user permission via the native TUI dialog.
-     *
-     * Wraps Permission.ask() with the current session/message context
-     * pre-filled. If the user denies, throws Permission.RejectedError.
-     * If a plugin's permission.ask hook overrides the decision to "allow",
-     * returns immediately without showing the dialog.
-     *
-     * This is the same mechanism that core tools (write, edit, bash, compact)
-     * use to request permission before dangerous operations.
-     */
-    askPermission(input: {
-      type: string
-      title: string
-      metadata?: Record<string, any>
-    }): Promise<void>
   }
 }
 ```
@@ -286,31 +268,18 @@ const result = await item.execute(args, {
     // Pre-configured LanguageModel from Provider.getModel()
     // (resolved once at tool setup, reused across calls)
     languageModel: (await Provider.getModel(input.model.providerID, input.model.modelID)).language,
-
-    // Permission dialog — wraps Permission.ask() with session context pre-filled
-    async askPermission({ type, title, metadata = {} }) {
-      await Permission.ask({
-        type,
-        title,
-        sessionID: input.sessionID,
-        messageID: input.processor.message.id,
-        callID: options.toolCallId,
-        metadata,
-      })
-    },
   },
 })
 ```
 
 **Why `(draft) => void` instead of `Record<string, unknown>`:** OpenCode's storage layer provides atomic updates via `Storage.update()`, which acquires a write lock, reads the current file, applies a mutation callback to the in-memory object, and writes it back atomically. A merge-based API (`updateMessage(id, { archive: ... })`) would require a read-then-write sequence outside the lock — a classic race condition. The callback pattern preserves the atomicity guarantees that OpenCode's own compaction code relies on (`compact.ts:649`, `compact.ts:684`).
 
-**Diff size:** ~50 lines in `prompt.ts` (tool context construction + `askPermission` wrapper), ~20 lines in type definitions.
+**Diff size:** ~40 lines in `prompt.ts` (tool context construction), ~15 lines in type definitions.
 
 **Risk:** Medium. Write access to messages is powerful. However:
 - Tools already have `$` (shell access), which is far more dangerous
 - This is the only write path available — the SDK client has no message write endpoints
 - The `permission.ask` hook already exists for plugins that want to gate dangerous operations
-- The `askPermission()` method lets plugin tools request user confirmation through the same native TUI dialog that core tools use, ensuring consistent UX
 
 ---
 
@@ -379,7 +348,6 @@ For Context Bonsai specifically:
 - **retrieve tool** → `tool` hook (existing) + `session` API (new) for reading archived content
 - **archive rendering** → `chat.context` hook (new) to filter archived messages and inject summary placeholders
 - **context gauge** → `event` hook (existing) for token data + `chat.context` hook (new) to inject `<system-reminder>`-tagged gauge text; `model.limit.context` (from `chat.context` input) for percentage computation
-- **user control modes** → `askPermission()` on `session` API for "ask" mode (native TUI dialog); "notify"/"silent" modes are plugin-internal
 - **compaction mode** → plugin-internal state + `chat.context` to prefix message IDs when active
 
 ---
@@ -403,8 +371,8 @@ For Context Bonsai specifically:
 | Change | Files Modified | Lines Changed (est.) | Complexity |
 |--------|---------------|---------------------|------------|
 | `chat.context` hook | `prompt.ts`, `plugin/src/index.ts` | ~35 | Low — follows `chat.params` pattern exactly |
-| Session API in ToolContext | `prompt.ts`, `plugin/src/tool.ts` | ~70 | Medium — delegates to existing `Storage.update` / `Session` / `Permission` functions |
-| **Total** | **3 files** | **~105 lines** | **Low-Medium** |
+| Session API in ToolContext | `prompt.ts`, `plugin/src/tool.ts` | ~55 | Medium — delegates to existing `Storage.update` / `Session` functions |
+| **Total** | **3 files** | **~90 lines** | **Low-Medium** |
 
 All changes are additive. No existing behavior changes. No breaking changes to the plugin API. No new dependencies.
 
@@ -412,7 +380,7 @@ All changes are additive. No existing behavior changes. No breaking changes to t
 
 ## Summary
 
-Two changes, ~105 lines of code, zero breaking changes. In exchange, OpenCode's plugin system gains the ability to influence what the LLM actually sees and make side-effect-free LLM calls — unlocking context management, RAG, compression, summarization, and analytics plugins that are currently impossible.
+Two changes, ~90 lines of code, zero breaking changes. In exchange, OpenCode's plugin system gains the ability to influence what the LLM actually sees and make side-effect-free LLM calls — unlocking context management, RAG, compression, summarization, and analytics plugins that are currently impossible.
 
 | Change | One-Liner | Pattern |
 |--------|-----------|---------|

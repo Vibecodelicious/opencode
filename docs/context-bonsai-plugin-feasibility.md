@@ -89,30 +89,19 @@ This is simpler than the core implementation, which persists a `ContextGaugePart
 
 **How the proposal resolves this:** The plugin maintains its own in-memory state (no dependency on `CompactionModeState`). The `chat.context` hook gives the plugin full control over message content before `toModelMessage()`, so it can apply message ID prefixing directly.
 
-### 5. User Control Modes (ask/notify/silent) — TODAY: Not feasible → WITH PROPOSAL: Yes
-
-Context Bonsai provides three modes for AI autonomy over archiving:
-- **ask**: AI requests permission before archiving — user sees a dialog and approves or denies
-- **notify**: AI archives and reports what it did
-- **silent**: AI handles it automatically
-
-**Gap in today's plugin system:** The "ask" mode requires triggering a native TUI permission dialog from within a tool's `execute()` function. The core compact tool does this via `Permission.ask()` (`compact.ts:916`), but this is an internal module not accessible to plugins.
-
-**How the proposal resolves this:** The `askPermission()` method on `ToolContext.session` wraps `Permission.ask()` with the current session/message context pre-filled. The plugin's compact tool calls `ctx.session.askPermission({ type: "context-bonsai-archive", title: "Archive 5 messages (~12,000 tokens)" })` — if the user denies, it throws `Permission.RejectedError` and the tool aborts. If a plugin's `permission.ask` hook overrides the decision to "allow", the dialog is skipped. The "notify" and "silent" modes are purely plugin-internal state — the plugin either returns a notification message or proceeds silently.
-
-### 6. Message Schema Extensions — TODAY: Not feasible → WITH PROPOSAL: Yes
+### 5. Message Schema Extensions — TODAY: Not feasible → WITH PROPOSAL: Yes
 
 **How the proposal resolves this:** The `updateMessage(id, fn)` callback receives a mutable draft of `MessageV2.Info`. Plugins can set arbitrary fields (e.g., `archive`, `archivedBy`) without schema changes. The storage layer is raw JSON throughout — `Storage.read()` returns `Bun.file().json()` with a type assertion (`storage.ts:168-176`), and `Storage.update()` reads, mutates, and writes back without validation. Zod schemas exist for type generation but are never applied to the read or write path. Custom fields survive the full cycle by design, not by accident.
 
-### 7. Overflow Detection & Auto-Compaction — TODAY: Not feasible → WITH PROPOSAL: Unnecessary
+### 6. Overflow Detection & Auto-Compaction — TODAY: Not feasible → WITH PROPOSAL: Unnecessary
 
 If a plugin prunes context effectively via `chat.context`, the model sees fewer tokens, the API reports lower usage, and `isOverflow()` won't trigger on the next turn. Built-in compaction acts as a safety net, not a conflict.
 
-### 8. TUI Rendering — TODAY: Not feasible → WITH PROPOSAL: Partial (nice-to-have)
+### 7. TUI Rendering — TODAY: Not feasible → WITH PROPOSAL: Partial (nice-to-have)
 
 No plugin hook for custom TUI components. Tool results render as raw text. This is a cosmetic limitation, not a functional blocker.
 
-### 9. Enterprise Share Filtering — TODAY: Not feasible → WITH PROPOSAL: Not addressed
+### 8. Enterprise Share Filtering — TODAY: Not feasible → WITH PROPOSAL: Not addressed
 
 The `share-next.ts` change filters `ContextGaugePart` from enterprise sync. No plugin hook exists for share/export filtering. Low priority — plugins can avoid adding sensitive parts in the first place.
 
@@ -182,7 +171,6 @@ To move Context Bonsai entirely to a plugin, OpenCode would need two changes (se
 | Summarization LLM call | No | Yes | `session.languageModel` + AI SDK `generateText()` — fully side-effect-free, inherits all provider config |
 | Overflow detection | No | Yes | Built-in compaction acts as safety net; no override needed |
 | TUI rendering | No | Partial | Nice-to-have — tool results render as text |
-| User control modes (ask/notify/silent) | No | Yes | `askPermission()` for "ask" mode; "notify"/"silent" are plugin-internal |
 | Auto-compaction modes | No | Yes | Plugin-internal state + `chat.context` + `session` API |
 | Message metadata (archive fields) | No | Yes | Atomic `updateMessage(id, fn)` can set arbitrary fields |
 | Share filtering | No | No | Low priority — avoid adding sensitive parts |
