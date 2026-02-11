@@ -288,10 +288,10 @@ The `ToolContext.session` API exposes raw mutation power over messages. For upst
 **What `updateMessage` guarantees:**
 - **Atomicity** — the callback runs inside `Storage.update()`, which acquires `Lock.write()` before reading current state. No concurrent writer can interleave.
 - **Event publishing** — after the atomic write completes, `Bus.publish(MessageV2.Event.Updated, { info })` fires. This means the TUI, the `event` plugin hook, and the share/sync system all see the change. This mirrors `Session.updateMessage` (`session/index.ts:344-349`) but adds atomicity.
-- **No validation** — the callback receives the raw `MessageV2.Info` draft. OpenCode does **not** re-validate the object after mutation. This matches the existing compact tool's behavior (`compact.ts:649-684`), which sets arbitrary fields like `archive` and `archivedBy` via `Storage.update` without post-write validation.
+- **No validation** — the callback receives the raw `MessageV2.Info` draft. OpenCode does **not** validate the object after mutation. The entire storage layer is raw JSON — `Storage.read()` returns `Bun.file().json()` with a type assertion, and `Storage.update()` reads, mutates, and writes back without validation. Zod schemas exist for type generation but are never applied to the read or write path. This matches the existing compact tool's behavior (`compact.ts:649-684`), which sets arbitrary fields like `archive` and `archivedBy` via `Storage.update`.
 
 **What plugins are allowed to mutate:**
-- **Any field on `MessageV2.Info`** — including custom metadata fields not in the Zod schema. OpenCode's storage is JSON-file-based; the schema is used for parsing on read, but `Storage.update` writes the raw object back without re-validation. The compact tool relies on this today.
+- **Any field on `MessageV2.Info`** — including custom metadata fields. OpenCode's storage is JSON-file-based with no runtime validation. Custom fields survive the full read/write cycle by design. The compact tool relies on this today.
 - The proposal does **not** constrain which fields plugins may set. This is intentional — the same "anything goes" model applies to the existing compact tool, and restricting it would require a field-level ACL that doesn't exist anywhere in the codebase.
 
 **What plugins must NOT do:**

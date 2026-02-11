@@ -84,9 +84,7 @@ The context gauge is currently injected as a `ContextGaugePart` on assistant mes
 
 ### 5. Message Schema Extensions — TODAY: Not feasible → WITH PROPOSAL: Yes
 
-**How the proposal resolves this:** The `updateMessage(id, fn)` callback receives a mutable draft of `MessageV2.Info`. Plugins can set arbitrary fields (e.g., `archive`, `archivedBy`) without Zod schema changes — `Storage.update` writes the raw object without re-validation, and `Storage.read` returns raw JSON without Zod parsing (`storage.ts:168-176`), so custom fields survive the full read/write cycle. The `chat.context` hook can read these fields when deciding how to render messages.
-
-**Noted dependency:** This works because OpenCode's storage layer currently performs no Zod validation on read or write — it's raw JSON throughout. The `MessageV2` Zod schemas do not use `.passthrough()`, so if schema validation were ever added to the read path, arbitrary fields would be silently stripped. For long-term robustness, the upstream proposal should either: (a) request `.passthrough()` on `MessageV2` schemas, or (b) propose an explicit `pluginMetadata: z.record(z.unknown()).optional()` field. For now, the current behavior is stable and relied upon by the existing compact tool.
+**How the proposal resolves this:** The `updateMessage(id, fn)` callback receives a mutable draft of `MessageV2.Info`. Plugins can set arbitrary fields (e.g., `archive`, `archivedBy`) without schema changes. The storage layer is raw JSON throughout — `Storage.read()` returns `Bun.file().json()` with a type assertion (`storage.ts:168-176`), and `Storage.update()` reads, mutates, and writes back without validation. Zod schemas exist for type generation but are never applied to the read or write path. Custom fields survive the full cycle by design, not by accident.
 
 ### 6. Overflow Detection & Auto-Compaction — TODAY: Not feasible → WITH PROPOSAL: Unnecessary
 
