@@ -2,9 +2,9 @@
 
 ## Executive Summary
 
-**Can Context Bonsai be rewritten as a plugin? Yes — with two targeted changes to OpenCode's plugin surface area.**
+**Can Context Bonsai be rewritten as a plugin? Yes — with two targeted changes to OpenCode's plugin surface area, and acceptance of a different summarization strategy.**
 
-A plugin can provide the compact and retrieve **tools** (the LLM-facing interface), but the core value of the feature depends on modifying how OpenCode **constructs the conversation before sending it to the LLM** — and the plugin system has no hook for that today. Two proposed changes (`chat.context` hook + Session API in `ToolContext`) close this gap entirely. Secondary LLM calls for summarization are already supported via the SDK client's `session.prompt()` and `session.summarize()` endpoints — this has been validated against the codebase. See `docs/proposal-plugin-hooks.md` for the full proposal.
+Two proposed changes (`chat.context` hook + Session API in `ToolContext`) close the core gaps: context transformation and message read/write access. However, one caveat remains: the compact tool's current summarization uses a side-effect-free internal path (`SessionProcessor` + `streamText()` with a hidden `summary: true` message), while a plugin must use `client.session.prompt()` which persists a visible user+assistant message pair. This is a workable strategy — the plugin can filter these artifacts via `chat.context` — but it means plugin-based summarization has different persistence semantics than the current core implementation. See `docs/proposal-plugin-hooks.md` for the full proposal.
 
 ---
 
@@ -44,16 +44,23 @@ Plugins also receive a `PluginInput` with: `client` (SDK), `project`, `directory
 
 ## Feature-by-Feature Feasibility
 
-### 1. Compact & Retrieve Tools — PARTIALLY FEASIBLE
+Each section describes the current plugin gap **and** how the proposed changes resolve it (or don't).
 
-**What works:** A plugin can register `compact` and `retrieve` tools via the `tool` hook. The LLM would see them in the tool list and could call them.
+### 1. Compact & Retrieve Tools — TODAY: Partial → WITH PROPOSAL: Yes (with caveats)
 
-**What doesn't work:**
+**What works today:** A plugin can register `compact` and `retrieve` tools via the `tool` hook. The LLM sees them and can call them.
+
+**Gaps in today's plugin system:**
 - **No access to message storage.** The compact tool needs to read all session messages, iterate over them by ID, and write `archive`/`archivedBy` metadata to specific messages. The plugin `ToolContext` only provides `sessionID`, `messageID`, `agent`, and `abort` — no Storage or Session API.
-- **No access to the LLM for summarization.** The compact tool makes a separate `streamText()` call to generate summaries, routed through `SessionProcessor` (for OAuth credentials). Plugins receive an SDK `client`, but it's unclear whether it supports raw `streamText` calls with custom system prompts and full conversation context.
+- **No side-effect-free LLM call path.** The compact tool makes a secondary `streamText()` call to generate summaries, routed through `SessionProcessor` (creating a temporary `summary: true` assistant message). Plugins have no access to `SessionProcessor` or raw `streamText()`.
 - **No way to trigger two-phase flow.** The prepare phase sets `CompactionModeState`, which is an in-memory singleton Map that `toModelMessage()` reads to decide whether to prefix message IDs. A plugin can't set this state or influence `toModelMessage` behavior.
 
-### 2. Message Archival Rendering — NOT FEASIBLE
+**How the proposal resolves these:**
+- **Storage gap** → Resolved by `ToolContext.session` API. `messages()`, `message(id)`, `updateMessage(id, fn)`, and `addPart()` give plugins full read/write access with atomic semantics.
+- **LLM summarization** → Partially resolved. Plugins can call `client.session.prompt({ system, parts })` for secondary LLM calls with a custom system prompt. However, this is **not equivalent** to the current compact implementation: `session.prompt()` always creates and persists a visible user message (`prompt.ts:965-1240`) then runs the full `loop()`, while the compact tool creates a hidden `summary: true` assistant message and calls `SessionProcessor.process()` + `streamText()` directly (`compact.ts:409-506`). A plugin summarization call via `session.prompt()` would leave a persistent user+assistant message pair in the conversation. This is a workable implementation strategy (the messages could be filtered out in `chat.context`), but it's not side-effect-free — the plugin must accept and manage these artifacts. Alternatively, `client.session.summarize()` triggers the built-in compaction system, which is useful but doesn't allow custom summarization prompts.
+- **Two-phase flow** → Resolved by `chat.context` hook. The plugin maintains its own in-memory state and applies message ID prefixing in the hook callback, bypassing `CompactionModeState` entirely.
+
+### 2. Message Archival Rendering — TODAY: Not feasible → WITH PROPOSAL: Yes
 
 This is the **core architectural gap**. When OpenCode builds the conversation to send to the LLM, it calls `MessageV2.toModelMessage()` which:
 
@@ -61,54 +68,35 @@ This is the **core architectural gap**. When OpenCode builds the conversation to
 2. Checks each message for `archivedBy` → skips it entirely
 3. Optionally prefixes all content with `[msg_xxx]` when compaction mode is enabled
 
-**There is no plugin hook that intercepts or modifies the messages array between `toModelMessage()` and `streamText()`.** The conversation construction happens at `prompt.ts:705-727`:
+**There is no plugin hook today** that intercepts or modifies the messages array before `streamText()`. The conversation construction at `prompt.ts:705-727` is hardcoded.
 
-```typescript
-messages: [
-  ...system.map(...),
-  ...MessageV2.toModelMessage(
-    msgs.filter(...),
-    { compactionModeEnabled: CompactionModeState.get(sessionID) },
-  ),
-],
-```
+**How the proposal resolves this:** The `chat.context` hook fires *before* `toModelMessage()`, giving plugins the `WithParts[]` array. A plugin can filter out archived messages, inject summary placeholders, and apply message ID prefixing — all before OpenCode's own conversion runs.
 
-This is hardcoded — no hook, no middleware, no extension point. Even `chat.params` only modifies temperature/topP/options, not the messages array.
+### 3. Context Gauge — TODAY: Not feasible → WITH PROPOSAL: Partial
 
-### 3. Context Gauge Injection — NOT FEASIBLE
+The context gauge is currently injected as a `ContextGaugePart` on assistant messages after each LLM response (`prompt.ts:762-767`). This requires access to the assistant message, token usage, and `Session.updatePart()`.
 
-The context gauge is injected as a `ContextGaugePart` on assistant messages after each LLM response (`prompt.ts:762-767`). This requires:
+**How the proposal addresses this:** The existing `event` hook receives `message.updated` events which include token usage and cost data on completed assistant messages. A plugin can observe these events to track context utilization. However, injecting a visible gauge part onto the assistant message still requires the `ToolContext.session.addPart()` API — which is only available during tool execution, not during event handling. A plugin could surface gauge information via a dedicated tool instead.
 
-- Access to the assistant message being built
-- Token usage data from the LLM response
-- Model context limit information
-- Ability to persist a new part via `Session.updatePart()`
+### 4. Compaction Mode State — TODAY: Not feasible → WITH PROPOSAL: Yes
 
-None of these are available to plugins. The `tool.execute.after` hook fires per-tool, not per-turn. The `event` hook receives events but can't modify state. The `chat.message` hook only fires for **user** messages, not assistant messages.
+**How the proposal resolves this:** The plugin maintains its own in-memory state (no dependency on `CompactionModeState`). The `chat.context` hook gives the plugin full control over message content before `toModelMessage()`, so it can apply message ID prefixing directly.
 
-### 4. Compaction Mode State — NOT FEASIBLE
+### 5. Message Schema Extensions — TODAY: Not feasible → WITH PROPOSAL: Yes
 
-The two-phase prepare/execute flow relies on `CompactionModeState`, an in-memory Map that toggles message ID visibility. This state is read by `toModelMessage()` during conversation construction. A plugin has no way to:
+**How the proposal resolves this:** The `updateMessage(id, fn)` callback receives a mutable draft of `MessageV2.Info`. Plugins can set arbitrary fields (e.g., `archive`, `archivedBy`) without Zod schema changes — `Storage.update` writes the raw object without re-validation. The `chat.context` hook can read these fields when deciding how to render messages.
 
-- Set this state
-- Read this state
-- Influence how `toModelMessage()` renders messages
+### 6. Overflow Detection & Auto-Compaction — TODAY: Not feasible → WITH PROPOSAL: Unnecessary
 
-### 5. Message Schema Extensions — NOT FEASIBLE
+If a plugin prunes context effectively via `chat.context`, the model sees fewer tokens, the API reports lower usage, and `isOverflow()` won't trigger on the next turn. Built-in compaction acts as a safety net, not a conflict.
 
-The `archive` and `archivedBy` fields are added to the `MessageV2.Info` Zod schema. A plugin can't extend Zod schemas on core types. Even if a plugin stored metadata externally, `toModelMessage()` wouldn't know to check for it.
+### 7. TUI Rendering — TODAY: Not feasible → WITH PROPOSAL: Partial (nice-to-have)
 
-### 6. Overflow Detection & Auto-Compaction — NOT FEASIBLE
+No plugin hook for custom TUI components. Tool results render as raw text. This is a cosmetic limitation, not a functional blocker.
 
-`SessionCompaction.isOverflow()` and `SessionCompaction.process()` are called from the main session loop. There's no hook for "context is about to overflow" or "session needs compaction."
+### 8. Enterprise Share Filtering — TODAY: Not feasible → WITH PROPOSAL: Not addressed
 
-### 7. TUI Rendering — NOT FEASIBLE
-
-The TUI tool renderers for compact/retrieve results are in the React-based Ink UI. There's no plugin hook for adding TUI components. Without these, the compact/retrieve tool results would render as raw text rather than formatted displays.
-
-### 8. Enterprise Share Filtering — NOT FEASIBLE
-
-The `share-next.ts` change filters `ContextGaugePart` from enterprise sync. No plugin hook exists for share/export filtering.
+The `share-next.ts` change filters `ContextGaugePart` from enterprise sync. No plugin hook exists for share/export filtering. Low priority — plugins can avoid adding sensitive parts in the first place.
 
 ---
 
@@ -130,7 +118,7 @@ To move Context Bonsai entirely to a plugin, OpenCode would need two changes (se
    - Atomically write `archive`/`archivedBy` metadata to messages
    - Create new message parts
 
-3. **LLM access for summarization** — **Validated.** The SDK `client` exposes `session.prompt()` (POST `/session/{id}/message`) which accepts `system?: string` as a full system prompt override — it *replaces* the agent prompt (`prompt.ts:800`), not appends to it. There is also a dedicated `session.summarize()` (POST `/session/{id}/summarize`) endpoint. Neither route has auth middleware restrictions. The compact tool's existing `generateSummaries()` function (`compact.ts:364-524`) demonstrates secondary LLM calls via `SessionProcessor` + `streamText()`, confirming the pattern works with OAuth credential routing.
+3. **LLM access for summarization** — **Workable, with different semantics.** The SDK `client` exposes `session.prompt()` (POST `/session/{id}/message`) which accepts `system?: string` as a full system prompt override — it *replaces* the agent prompt (`prompt.ts:800`), not appends to it. However, `session.prompt()` always persists a user message (`prompt.ts:965-1240`) and runs the full `loop()` — it is **not** a side-effect-free internal call. The current compact tool avoids this by creating a hidden `summary: true` assistant message and calling `SessionProcessor.process()` + `streamText()` directly (`compact.ts:409-506`), which plugins cannot access. A plugin using `session.prompt()` for summarization would leave persistent user+assistant message artifacts that must be filtered out (e.g., via `chat.context`). There is also `session.summarize()` (POST `/session/{id}/summarize`), but this triggers the built-in compaction system rather than accepting custom prompts. **Bottom line:** plugin summarization works but requires accepting session-mutating calls as the implementation strategy.
 
 ### Not Needed (Previously Considered)
 
@@ -156,7 +144,7 @@ To move Context Bonsai entirely to a plugin, OpenCode would need two changes (se
 | Message ID visibility toggle | No | Yes | Plugin-internal state + `chat.context` |
 | Context gauge display | No | Yes | `event` hook (existing) + `tool` to surface it |
 | Two-phase prepare/execute | No | Yes | Plugin-internal state + `chat.context` |
-| Summarization LLM call | No | Yes | SDK `client.session.prompt({ system })` — validated, replaces agent prompt |
+| Summarization LLM call | No | Yes* | `client.session.prompt({ system })` works but persists messages; plugin must filter artifacts via `chat.context` |
 | Overflow detection | No | Yes | Built-in compaction acts as safety net; no override needed |
 | TUI rendering | No | Partial | Nice-to-have — tool results render as text |
 | Auto-compaction modes | No | Yes | Plugin-internal state + `chat.context` + `session` API |
@@ -201,6 +189,8 @@ Continue maintaining Context Bonsai as a fork. The feature is deeply integrated 
 
 Context Bonsai's value comes primarily from **modifying how the conversation is constructed before being sent to the LLM** — and this is exactly what the plugin system doesn't support today. The tools (compact/retrieve) are the user-facing surface, but the machinery behind them requires access to the message pipeline and storage layer.
 
-The most pragmatic path is **Option A**: propose a `chat.context` hook (on `WithParts[]`, before model conversion) and a Session API in `ToolContext` (with atomic `Storage.update`-backed writes). These are two general-purpose improvements (~90 lines, 3 files) that would benefit any plugin wanting to do context manipulation, prompt injection, or message filtering. With those changes in place, Context Bonsai could be a clean, self-contained plugin with no core modifications.
+The most pragmatic path is **Option A**: propose a `chat.context` hook (on `WithParts[]`, before model conversion) and a Session API in `ToolContext` (with atomic `Storage.update`-backed writes). These are two general-purpose improvements (~90 lines, 3 files) that would benefit any plugin wanting to do context manipulation, prompt injection, or message filtering.
+
+**One caveat remains:** plugin-based summarization must use `client.session.prompt()`, which persists visible user+assistant messages — unlike the current compact tool's hidden `SessionProcessor` path. This is workable (the plugin filters artifacts via `chat.context`), but means the plugin implementation has different persistence semantics than the core version. If side-effect-free secondary LLM calls are needed in the future, that would require a third change (exposing `SessionProcessor` or a raw `streamText` wrapper to plugins).
 
 See `docs/proposal-plugin-hooks.md` for the detailed proposal.
