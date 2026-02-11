@@ -53,7 +53,7 @@ Each section describes the current plugin gap **and** how the proposed changes r
 **Gaps in today's plugin system:**
 - **No access to message storage.** The compact tool needs to read all session messages, iterate over them by ID, and write `archive`/`archivedBy` metadata to specific messages. The plugin `ToolContext` only provides `sessionID`, `messageID`, `agent`, and `abort` — no Storage or Session API.
 - **No LLM call path.** The compact tool makes a secondary `streamText()` call to generate summaries, routed through `SessionProcessor` with the session's configured provider. Plugins have no access to `SessionProcessor` or the pre-configured `LanguageModel` instance.
-- **No way to trigger two-phase flow.** The prepare phase sets `CompactionModeState`, which is an in-memory singleton Map that `toModelMessage()` reads to decide whether to prefix message IDs. A plugin can't set this state or influence `toModelMessage` behavior.
+- **No way to trigger two-phase flow.** In the fork, the prepare phase sets `CompactionModeState`, which is an in-memory singleton Map that the fork's `toModelMessage()` reads to decide whether to prefix message IDs. Neither `CompactionModeState` nor the message ID prefixing logic exists in upstream OpenCode. A plugin must implement the entire two-phase flow and message ID prefixing itself.
 
 **How the proposal resolves these:**
 - **Storage gap** → Resolved by `ToolContext.session` API. `messages()`, `message(id)`, `updateMessage(id, fn)`, and `addPart()` give plugins full read/write access with atomic semantics.
@@ -62,15 +62,17 @@ Each section describes the current plugin gap **and** how the proposed changes r
 
 ### 2. Message Archival Rendering — TODAY: Not feasible → WITH PROPOSAL: Yes
 
-This is the **core architectural gap**. When OpenCode builds the conversation to send to the LLM, it calls `MessageV2.toModelMessage()` which:
+This is the **core architectural gap**. In the fork, `MessageV2.toModelMessage()` handles archive rendering:
 
 1. Checks each message for `archive` metadata → renders a `[SMART_ARCHIVED]` placeholder instead
 2. Checks each message for `archivedBy` → skips it entirely
 3. Optionally prefixes all content with `[msg_xxx]` when compaction mode is enabled
 
+None of this exists in upstream OpenCode. Upstream `toModelMessage()` simply converts `WithParts[]` to `ModelMessage[]` without any archive or compaction mode awareness. A plugin must handle all of this itself.
+
 **There is no plugin hook today** that intercepts or modifies the messages array before `streamText()`. The conversation construction at `prompt.ts:705-727` is hardcoded.
 
-**How the proposal resolves this:** The `chat.context` hook fires *before* `toModelMessage()`, giving plugins the `WithParts[]` array. A plugin can filter out archived messages, inject summary placeholders, and apply message ID prefixing — all before OpenCode's own conversion runs.
+**How the proposal resolves this:** The `chat.context` hook fires *before* `toModelMessage()`, giving plugins the `WithParts[]` array. The plugin handles all archive rendering: filtering out archived messages, injecting summary placeholders, skipping `archivedBy` messages, and prefixing message IDs when in compaction mode. Upstream `toModelMessage()` then converts the plugin's output to model format — it doesn't need to know about archives.
 
 ### 3. Context Gauge — TODAY: Not feasible → WITH PROPOSAL: Yes
 
