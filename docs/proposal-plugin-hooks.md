@@ -162,6 +162,10 @@ export type ToolContext = {
   messageID: string
   agent: string
   abort: AbortSignal
+
+  // NEW: These exist at runtime (prompt.ts:852-876) but are not yet
+  // typed in the current plugin ToolContext (plugin/src/tool.ts:3-8).
+  // Adding them here alongside the session API.
   callID?: string
   extra?: { [key: string]: any }
   metadata(input: { title?: string; metadata?: any }): void
@@ -289,7 +293,7 @@ The `ToolContext.session` API exposes raw mutation power over messages. For upst
 
 **What `updateMessage` guarantees:**
 - **Atomicity** — the callback runs inside `Storage.update()`, which acquires `Lock.write()` before reading current state. No concurrent writer can interleave.
-- **Event publishing** — after the atomic write completes, `Bus.publish(MessageV2.Event.Updated, { info })` fires. This means the TUI, the `event` plugin hook, and the share/sync system all see the change. This mirrors `Session.updateMessage` (`session/index.ts:344-349`) but adds atomicity.
+- **Event publishing** — after the atomic write completes, `Bus.publish(MessageV2.Event.Updated, { info })` fires. This means the TUI, the `event` plugin hook, and the share/sync system all see the change. This improves upon `Session.updateMessage` (`session/index.ts:344-349`), which uses `Storage.write()` (blind overwrite) rather than atomic read-modify-write.
 - **No validation** — the callback receives the raw `MessageV2.Info` draft. OpenCode does **not** validate the object after mutation. The entire storage layer is raw JSON — `Storage.read()` returns `Bun.file().json()` with a type assertion, and `Storage.update()` reads, mutates, and writes back without validation. Zod schemas exist for type generation but are never applied to the read or write path. This matches the existing compact tool's behavior (`compact.ts:649-684`), which sets arbitrary fields like `archive` and `archivedBy` via `Storage.update`.
 
 **What plugins are allowed to mutate:**
