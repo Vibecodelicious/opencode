@@ -4,7 +4,7 @@
 
 **Can Context Bonsai be rewritten as a plugin? Yes — with two targeted changes to OpenCode's plugin surface area.**
 
-Two proposed changes (`chat.context` hook + Session API in `ToolContext`) close the core gaps: context transformation and message read/write access. Summarization — which previously appeared to require a third change — is handled by the plugin making **direct AI SDK calls**. OpenCode plugins are full npm packages loaded via `BunProc.install()` and dynamic `import()` (`plugin/index.ts:14-52`). A plugin can declare `"ai"` and a provider SDK (e.g., `@ai-sdk/anthropic`) as dependencies, read API keys from `process.env`, and call `generateText()` / `streamText()` directly — completely bypassing `client.session.prompt()`. This gives the plugin the same side-effect-free summarization path that the core compact tool uses (`SessionProcessor` + `streamText()`), without requiring any new OpenCode primitives. The `ToolContext.extra` field provides `providerID` and `modelID` (`prompt.ts:857`) so the plugin knows which model the session is using. See `docs/proposal-plugin-hooks.md` for the full proposal.
+Two proposed changes (`chat.context` hook + Session API in `ToolContext`) close the core gaps: context transformation and message read/write access. The Session API includes a `languageModel` field that exposes the session's pre-configured `LanguageModel` instance (from `Provider.getModel()`), giving the plugin direct access to `generateText()` / `streamText()` with all provider configuration — custom base URLs, auth tokens, headers, middleware — already applied. This is fully side-effect-free (no session mutation, no `loop()`, no events) and equivalent to the core compact tool's `SessionProcessor` + `streamText()` path. See `docs/proposal-plugin-hooks.md` for the full proposal.
 
 ---
 
@@ -46,18 +46,18 @@ Plugins also receive a `PluginInput` with: `client` (SDK), `project`, `directory
 
 Each section describes the current plugin gap **and** how the proposed changes resolve it (or don't).
 
-### 1. Compact & Retrieve Tools — TODAY: Partial → WITH PROPOSAL: Yes (with caveats)
+### 1. Compact & Retrieve Tools — TODAY: Partial → WITH PROPOSAL: Yes
 
 **What works today:** A plugin can register `compact` and `retrieve` tools via the `tool` hook. The LLM sees them and can call them.
 
 **Gaps in today's plugin system:**
 - **No access to message storage.** The compact tool needs to read all session messages, iterate over them by ID, and write `archive`/`archivedBy` metadata to specific messages. The plugin `ToolContext` only provides `sessionID`, `messageID`, `agent`, and `abort` — no Storage or Session API.
-- **No obvious LLM call path.** The compact tool makes a secondary `streamText()` call to generate summaries, routed through `SessionProcessor` (creating a temporary `summary: true` assistant message). Plugins have no access to `SessionProcessor` — but they don't need it (see resolution below).
+- **No LLM call path.** The compact tool makes a secondary `streamText()` call to generate summaries, routed through `SessionProcessor` with the session's configured provider. Plugins have no access to `SessionProcessor` or the pre-configured `LanguageModel` instance.
 - **No way to trigger two-phase flow.** The prepare phase sets `CompactionModeState`, which is an in-memory singleton Map that `toModelMessage()` reads to decide whether to prefix message IDs. A plugin can't set this state or influence `toModelMessage` behavior.
 
 **How the proposal resolves these:**
 - **Storage gap** → Resolved by `ToolContext.session` API. `messages()`, `message(id)`, `updateMessage(id, fn)`, and `addPart()` give plugins full read/write access with atomic semantics.
-- **LLM summarization** → Resolved via direct AI SDK calls. Plugins are npm packages — they can import `"ai"` and a provider SDK (e.g., `@ai-sdk/anthropic`) as dependencies and call `generateText()` / `streamText()` directly using API keys from `process.env`. The `ToolContext.extra` field provides `providerID` and `modelID` so the plugin knows which model the session is using. This completely bypasses `client.session.prompt()` and its side effects (persistent messages, `loop()` execution, event emission). The result is equivalent to the core compact tool's `SessionProcessor` + `streamText()` path — a side-effect-free inference call with no session mutation.
+- **LLM summarization** → Resolved via `ToolContext.session.languageModel`. The Session API exposes the session's pre-configured `LanguageModel` instance (from `Provider.getModel()`), which has all provider configuration baked in: custom base URLs, auth tokens from `auth.json`, provider-specific headers (e.g., Anthropic beta headers), AWS Bedrock credential chains, Google Vertex project/location, and any plugin auth loader output. The plugin calls `generateText({ model: ctx.session.languageModel, system: "...", messages: [...] })` directly — fully side-effect-free, no session mutation, equivalent to the core compact tool's internal `streamText()` path. This avoids `client.session.prompt()` entirely (which persists messages and runs the full `loop()`).
 - **Two-phase flow** → Resolved by `chat.context` hook. The plugin maintains its own in-memory state and applies message ID prefixing in the hook callback, bypassing `CompactionModeState` entirely.
 
 ### 2. Message Archival Rendering — TODAY: Not feasible → WITH PROPOSAL: Yes
@@ -84,7 +84,9 @@ The context gauge is currently injected as a `ContextGaugePart` on assistant mes
 
 ### 5. Message Schema Extensions — TODAY: Not feasible → WITH PROPOSAL: Yes
 
-**How the proposal resolves this:** The `updateMessage(id, fn)` callback receives a mutable draft of `MessageV2.Info`. Plugins can set arbitrary fields (e.g., `archive`, `archivedBy`) without Zod schema changes — `Storage.update` writes the raw object without re-validation. The `chat.context` hook can read these fields when deciding how to render messages.
+**How the proposal resolves this:** The `updateMessage(id, fn)` callback receives a mutable draft of `MessageV2.Info`. Plugins can set arbitrary fields (e.g., `archive`, `archivedBy`) without Zod schema changes — `Storage.update` writes the raw object without re-validation, and `Storage.read` returns raw JSON without Zod parsing (`storage.ts:168-176`), so custom fields survive the full read/write cycle. The `chat.context` hook can read these fields when deciding how to render messages.
+
+**Noted dependency:** This works because OpenCode's storage layer currently performs no Zod validation on read or write — it's raw JSON throughout. The `MessageV2` Zod schemas do not use `.passthrough()`, so if schema validation were ever added to the read path, arbitrary fields would be silently stripped. For long-term robustness, the upstream proposal should either: (a) request `.passthrough()` on `MessageV2` schemas, or (b) propose an explicit `pluginMetadata: z.record(z.unknown()).optional()` field. For now, the current behavior is stable and relied upon by the existing compact tool.
 
 ### 6. Overflow Detection & Auto-Compaction — TODAY: Not feasible → WITH PROPOSAL: Unnecessary
 
@@ -118,26 +120,24 @@ To move Context Bonsai entirely to a plugin, OpenCode would need two changes (se
    - Atomically write `archive`/`archivedBy` metadata to messages
    - Create new message parts (via `addPart()` — available during tool execution only, does **not** solve event-time writes like context gauge injection)
 
-3. **LLM access for summarization** — **Resolved via direct AI SDK calls (no OpenCode changes needed).** OpenCode plugins are full npm packages installed via `BunProc.install()` and loaded via dynamic `import()` (`plugin/index.ts:14-52`). A plugin can declare the Vercel AI SDK (`"ai"`) and a provider SDK (e.g., `@ai-sdk/anthropic`) as dependencies and call `generateText()` / `streamText()` directly:
+3. **LLM access for summarization** — **Resolved via `ToolContext.session.languageModel` (part of change #2).** The Session API exposes the session's pre-configured `LanguageModel` instance, giving the plugin access to the same model object that OpenCode's own `SessionCompaction.process()` uses (`compaction.ts:242-316`). The plugin imports the Vercel AI SDK (`"ai"` package) and calls `generateText()` directly:
 
    ```typescript
    import { generateText } from "ai"
-   import { createAnthropic } from "@ai-sdk/anthropic"
 
    // Inside tool execute():
-   const provider = createAnthropic({ apiKey: process.env.ANTHROPIC_API_KEY })
    const { text } = await generateText({
-     model: provider(ctx.extra.modelID),
+     model: ctx.session.languageModel,
      system: compactionSystemPrompt,
      messages: messagesToSummarize,
    })
    ```
 
-   This is fully side-effect-free — no session messages created, no `loop()` execution, no events emitted, no recursive compaction risk. The `ToolContext.extra` field provides `providerID` and `modelID` (`prompt.ts:857`) so the plugin can match the session's model. API keys come from `process.env`, the same source OpenCode itself uses.
+   This is fully side-effect-free — no session messages, no `loop()`, no events, no recursive compaction. The `LanguageModel` comes from `Provider.getModel()` with all provider configuration already applied: custom base URLs, auth tokens from `auth.json`, provider-specific headers, AWS credential chains, plugin auth loader output, etc. The plugin doesn't need to reconstruct any of this.
 
-   **Why not `client.session.prompt()`?** That path always persists a user message (`prompt.ts:202`) and runs the full `loop()` including overflow compaction (`prompt.ts:555-570`) and tool resolution (`prompt.ts:613`). Direct AI SDK calls avoid all of this.
+   **Why not `client.session.prompt()`?** That path always persists a user message (`prompt.ts:202`) and runs the full `loop()` including overflow compaction (`prompt.ts:555-570`) and tool resolution (`prompt.ts:613`).
 
-   **Why not a new `infer()` primitive?** Not needed — the plugin already has everything it needs to make its own LLM calls. Adding an `infer()` API would be redundant with what any npm package can already do.
+   **Why not a new `infer()` primitive?** Not needed — exposing the `LanguageModel` lets the plugin call the AI SDK directly, which is more flexible and adds no new API surface beyond what change #2 already provides.
 
 ### Not Needed (Previously Considered)
 
@@ -157,13 +157,13 @@ To move Context Bonsai entirely to a plugin, OpenCode would need two changes (se
 
 | Component | Plugin Today | With Proposed Changes | Notes |
 |-----------|:---:|:---:|---|
-| Compact tool (LLM interface) | Partial | Yes | `tool` hook (existing) + `session` API (new) + direct AI SDK calls for summarization |
+| Compact tool (LLM interface) | Partial | Yes | `tool` hook (existing) + `session` API (new) + `session.languageModel` for summarization |
 | Retrieve tool (LLM interface) | Partial | Yes | `tool` hook (existing) + `session` API (new) |
 | Archive rendering in context | No | Yes | `chat.context` hook on `WithParts[]` (new) |
 | Message ID visibility toggle | No | Yes | Plugin-internal state + `chat.context` |
 | Context gauge display | No | Partial | `event` hook for tracking; no way to inject gauge part onto assistant messages outside tool execution |
 | Two-phase prepare/execute | No | Yes | Plugin-internal state + `chat.context` |
-| Summarization LLM call | No | Yes | Plugin imports AI SDK directly and calls `generateText()` / `streamText()` — fully side-effect-free, no session mutation |
+| Summarization LLM call | No | Yes | `session.languageModel` + AI SDK `generateText()` — fully side-effect-free, inherits all provider config |
 | Overflow detection | No | Yes | Built-in compaction acts as safety net; no override needed |
 | TUI rendering | No | Partial | Nice-to-have — tool results render as text |
 | Auto-compaction modes | No | Yes | Plugin-internal state + `chat.context` + `session` API |
@@ -180,9 +180,7 @@ The **cleanest long-term approach** is to propose 2 targeted changes to the Open
 
 1. **`chat.context` hook** — Transform the `WithParts[]` message array *before* `toModelMessage()` conversion and `streamText()`. This hook fires early enough that plugins have access to message IDs, part structure, and metadata — the same data structures OpenCode's own compaction uses. This is generally useful beyond Context Bonsai and would benefit the entire plugin ecosystem (RAG, redaction, prompt caching, etc.).
 
-2. **Session API in `ToolContext`** — Expose `messages()`, `message(id)`, `updateMessage(id, fn)`, and `addPart()` on the tool execution context. This is a **hard requirement** because the SDK client only has read-only message endpoints — there is no write path for plugins today. The `updateMessage` API uses a callback pattern `(draft) => void` that delegates to `Storage.update()`, preserving the atomic write-lock semantics used throughout OpenCode's codebase, with an identity-field guard that throws if `id`, `sessionID`, `role`, or `parentID` are modified (see proposal for implementation). `message(id)` is included to avoid full-list scans during archive-by-ID operations. `addPart()` enables part creation during tool execution but does **not** solve the gauge gap (event-time writes remain unavailable).
-
-**Summarization requires no OpenCode changes.** Plugins are full npm packages — they can import the Vercel AI SDK and a provider SDK as dependencies and call `generateText()` / `streamText()` directly using API keys from `process.env`. The `ToolContext.extra` field provides `providerID` and `modelID`. This is fully side-effect-free: no session messages created, no `loop()` execution, no events emitted.
+2. **Session API in `ToolContext`** — Expose `messages()`, `message(id)`, `updateMessage(id, fn)`, `addPart()`, and `languageModel` on the tool execution context. This is a **hard requirement** because the SDK client only has read-only message endpoints and no access to the configured `LanguageModel`. The `updateMessage` API uses a callback pattern `(draft) => void` that delegates to `Storage.update()`, preserving atomic write-lock semantics, with an identity-field guard (see proposal). `message(id)` avoids full-list scans during archive-by-ID operations. `addPart()` enables part creation during tool execution (does **not** solve event-time writes). `languageModel` exposes the pre-configured `LanguageModel` instance from `Provider.getModel()`, giving plugins side-effect-free LLM access with all provider configuration (base URLs, auth, headers, middleware) already applied.
 
 A previously considered `session.turn.after` hook was dropped — the existing `event` hook already receives `message.updated` events with full token/cost data. An overflow/compaction override hook is also unnecessary — effective `chat.context` pruning keeps token counts below thresholds, and built-in compaction serves as a safety net.
 
@@ -210,6 +208,6 @@ Context Bonsai's value comes primarily from **modifying how the conversation is 
 
 The most pragmatic path is **Option A**: propose a `chat.context` hook (on `WithParts[]`, before model conversion) and a Session API in `ToolContext` (with atomic `Storage.update`-backed writes). These are two general-purpose improvements (~90 lines, 3 files) that would benefit any plugin doing context manipulation, prompt injection, or message filtering.
 
-Summarization — which initially appeared to require a third OpenCode change — is handled entirely by the plugin itself. Since OpenCode plugins are full npm packages (`BunProc.install()` + dynamic `import()`), the plugin can import the Vercel AI SDK and call `generateText()` / `streamText()` directly with API keys from `process.env` and model info from `ToolContext.extra`. This gives the plugin the same side-effect-free inference path that the core compact tool uses, without any new OpenCode primitives. No session messages are created, no `loop()` runs, no events are emitted.
+Summarization is handled by the `languageModel` field on the Session API. The plugin calls `generateText({ model: ctx.session.languageModel, ... })` with the pre-configured `LanguageModel` instance, which includes all provider configuration (custom base URLs, auth tokens, headers, middleware). This is the same model object that OpenCode's own `SessionCompaction.process()` uses. No session messages are created, no `loop()` runs, no events are emitted.
 
 See `docs/proposal-plugin-hooks.md` for the detailed proposal.

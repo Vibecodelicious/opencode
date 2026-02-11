@@ -146,10 +146,11 @@ messages: [
 - Any tool that needs to reference prior conversation (search tools, citation tools)
 - Tools that annotate messages with metadata
 - Tools that create synthetic message parts (summaries, bookmarks)
+- Tools that need side-effect-free LLM calls (summarization, classification, extraction)
 - Tools that need to fork or branch conversations
 - Debugging tools that inspect conversation state
 
-**API surface** (minimal — just what's needed, nothing more):
+**API surface** (minimal — message R/W + LLM access):
 
 ```typescript
 // In packages/plugin/src/tool.ts, update ToolContext:
@@ -195,6 +196,23 @@ export type ToolContext = {
       type: string
       [key: string]: unknown
     }): Promise<void>
+
+    /**
+     * The session's pre-configured LanguageModel instance.
+     *
+     * This is the same model object that OpenCode uses internally for
+     * the session's LLM calls (via Provider.getModel()). All provider
+     * configuration is already applied: custom base URLs, auth tokens,
+     * headers, middleware, and plugin auth loader output.
+     *
+     * Use with the AI SDK for side-effect-free inference:
+     *   const { text } = await generateText({
+     *     model: ctx.session.languageModel,
+     *     system: "...",
+     *     messages: [...],
+     *   })
+     */
+    languageModel: LanguageModel
   }
 }
 ```
@@ -245,6 +263,9 @@ const result = await item.execute(args, {
         ...part,
       } as any)
     },
+    // Pre-configured LanguageModel from Provider.getModel()
+    // (resolved once at tool setup, reused across calls)
+    languageModel: (await Provider.getModel(input.model.providerID, input.model.modelID)).language,
   },
 })
 ```
@@ -310,7 +331,7 @@ With only these changes, a plugin can implement:
 
 | Capability | Which Hook(s) |
 |------------|---------------|
-| Custom context compression/summarization | `tool` + `session` API + `chat.context` + direct AI SDK calls for summarization |
+| Custom context compression/summarization | `tool` + `session` API (`languageModel` + message R/W) + `chat.context` |
 | RAG / document injection | `tool` + `chat.context` |
 | Context window monitoring | `event` (existing — `message.updated` events include tokens) |
 | Cost budget enforcement | `event` (existing) + `tool` |
@@ -321,7 +342,7 @@ With only these changes, a plugin can implement:
 | Token analytics | `event` (existing — assistant messages include token/cost data) |
 
 For Context Bonsai specifically:
-- **compact tool** → `tool` hook (existing) + `session` API (new) for reading messages and writing archive metadata + direct AI SDK `generateText()` for summarization (no OpenCode changes needed)
+- **compact tool** → `tool` hook (existing) + `session` API (new) for message R/W and `languageModel` for summarization
 - **retrieve tool** → `tool` hook (existing) + `session` API (new) for reading archived content
 - **archive rendering** → `chat.context` hook (new) to filter archived messages and inject summary placeholders
 - **context gauge** → `event` hook (existing) to observe token usage after each turn
@@ -339,7 +360,7 @@ For Context Bonsai specifically:
 | TUI tool renderer registration | Nice-to-have, not blocking. Tool results already render as text. Custom renderers are a cosmetic improvement that can come later. |
 | Share/export filtering hook | Very niche. Can be handled by not adding sensitive parts in the first place. |
 | System prompt modification hook | Already possible via `AGENTS.md` / `config.instructions`. The `chat.context` hook also provides the `system` array for programmatic modification. |
-| Side-effect-free LLM inference (`infer()`) | Not needed. Plugins are full npm packages (`BunProc.install()` + dynamic `import()`) and can import the Vercel AI SDK (`"ai"`, `@ai-sdk/anthropic`, etc.) as dependencies. A plugin tool can call `generateText()` / `streamText()` directly using API keys from `process.env` and model info from `ToolContext.extra` (`{ providerID, modelID }`). This is fully side-effect-free — no session messages, no `loop()`, no events — and equivalent to the core compact tool's internal `SessionProcessor` + `streamText()` path. No OpenCode changes required. |
+| Side-effect-free LLM inference (`infer()`) | Not needed. The `ToolContext.session.languageModel` field exposes the pre-configured `LanguageModel` instance from `Provider.getModel()`. A plugin imports the AI SDK (`"ai"` package) and calls `generateText({ model: ctx.session.languageModel, ... })` directly — fully side-effect-free (no session messages, no `loop()`, no events) and equivalent to the core compact tool's internal `SessionProcessor` + `streamText()` path. All provider configuration (base URLs, auth, headers, middleware) is already applied. A separate `infer()` API would be redundant. |
 
 ---
 
@@ -357,7 +378,7 @@ All changes are additive. No existing behavior changes. No breaking changes to t
 
 ## Summary
 
-Two changes, ~90 lines of code, zero breaking changes. In exchange, OpenCode's plugin system gains the ability to influence what the LLM actually sees — unlocking context management, RAG, compression, and analytics plugins that are currently impossible. Summarization requires no OpenCode changes — plugins can import the Vercel AI SDK directly and make side-effect-free `generateText()` calls.
+Two changes, ~90 lines of code, zero breaking changes. In exchange, OpenCode's plugin system gains the ability to influence what the LLM actually sees and make side-effect-free LLM calls — unlocking context management, RAG, compression, summarization, and analytics plugins that are currently impossible.
 
 | Change | One-Liner | Pattern |
 |--------|-----------|---------|
