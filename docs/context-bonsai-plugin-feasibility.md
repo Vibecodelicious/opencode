@@ -72,11 +72,16 @@ This is the **core architectural gap**. When OpenCode builds the conversation to
 
 **How the proposal resolves this:** The `chat.context` hook fires *before* `toModelMessage()`, giving plugins the `WithParts[]` array. A plugin can filter out archived messages, inject summary placeholders, and apply message ID prefixing — all before OpenCode's own conversion runs.
 
-### 3. Context Gauge — TODAY: Not feasible → WITH PROPOSAL: Partial
+### 3. Context Gauge — TODAY: Not feasible → WITH PROPOSAL: Yes
 
-The context gauge is currently injected as a `ContextGaugePart` on assistant messages after each LLM response (`prompt.ts:762-767`). This requires access to the assistant message, token usage, and `Session.updatePart()`.
+The context gauge is a **compaction trigger for the model**, not an observability feature. It injects text like `[CONTEXT GAUGE: 67,000 / 100,000 tokens (67%)]` into the conversation so the model sees its own context pressure and proactively looks for compaction opportunities. The compact tool's system prompt tells the model to monitor these gauges and compact at 60-80% utilization. Gauge frequency ramps up as context fills (sparse early, frequent near capacity).
 
-**How the proposal addresses this:** The existing `event` hook receives `message.updated` events which include token usage and cost data on completed assistant messages. A plugin can observe these events to track context utilization. However, injecting a visible gauge part onto the assistant message still requires the `ToolContext.session.addPart()` API — which is only available during tool execution, not during event handling. A plugin could surface gauge information via a dedicated tool instead.
+**How the proposal resolves this:** The `chat.context` hook fires before every LLM call. The plugin:
+1. Tracks token usage from `message.updated` events via the existing `event` hook (assistant messages include token counts)
+2. Computes utilization against the model's context limit (available from `chat.context` input's `model` field or `ToolContext.extra`)
+3. Injects gauge text directly into the messages array in the `chat.context` callback — either appended to the last assistant message or as a synthetic message
+
+This is simpler than the core implementation, which persists a `ContextGaugePart` schema type on assistant messages and renders it in `toModelMessage()`. The plugin just needs the model to *see* the gauge; it doesn't need to persist it as a typed part.
 
 ### 4. Compaction Mode State — TODAY: Not feasible → WITH PROPOSAL: Yes
 
@@ -159,7 +164,7 @@ To move Context Bonsai entirely to a plugin, OpenCode would need two changes (se
 | Retrieve tool (LLM interface) | Partial | Yes | `tool` hook (existing) + `session` API (new) |
 | Archive rendering in context | No | Yes | `chat.context` hook on `WithParts[]` (new) |
 | Message ID visibility toggle | No | Yes | Plugin-internal state + `chat.context` |
-| Context gauge display | No | Partial | `event` hook for tracking; no way to inject gauge part onto assistant messages outside tool execution |
+| Context gauge (compaction trigger) | No | Yes | `event` hook for token data + `chat.context` to inject gauge text into conversation |
 | Two-phase prepare/execute | No | Yes | Plugin-internal state + `chat.context` |
 | Summarization LLM call | No | Yes | `session.languageModel` + AI SDK `generateText()` — fully side-effect-free, inherits all provider config |
 | Overflow detection | No | Yes | Built-in compaction acts as safety net; no override needed |

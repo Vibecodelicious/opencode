@@ -345,7 +345,7 @@ For Context Bonsai specifically:
 - **compact tool** → `tool` hook (existing) + `session` API (new) for message R/W and `languageModel` for summarization
 - **retrieve tool** → `tool` hook (existing) + `session` API (new) for reading archived content
 - **archive rendering** → `chat.context` hook (new) to filter archived messages and inject summary placeholders
-- **context gauge** → `event` hook (existing) to observe token usage after each turn
+- **context gauge** → `event` hook (existing) for token data + `chat.context` hook (new) to inject gauge text into conversation as a compaction trigger for the model
 - **compaction mode** → plugin-internal state + `chat.context` to prefix message IDs when active
 
 ---
