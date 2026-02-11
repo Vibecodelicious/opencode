@@ -79,9 +79,11 @@ The context gauge is a **compaction trigger for the model**, not an observabilit
 **How the proposal resolves this:** The `chat.context` hook fires before every LLM call. The plugin:
 1. Tracks token usage from `message.updated` events via the existing `event` hook (assistant messages include token counts)
 2. Computes utilization against the model's context limit (available from `chat.context` input's `model` field or `ToolContext.extra`)
-3. Injects gauge text directly into the messages array in the `chat.context` callback — either appended to the last assistant message or as a synthetic message
+3. Injects gauge text as a `<system-reminder>`-tagged synthetic text part on the last user message in the `chat.context` callback
 
-This is simpler than the core implementation, which persists a `ContextGaugePart` schema type on assistant messages and renders it in `toModelMessage()`. The plugin just needs the model to *see* the gauge; it doesn't need to persist it as a typed part.
+This follows the established `insertReminders()` pattern (`prompt.ts:1251-1277`), which already injects `<system-reminder>`-tagged synthetic parts on user messages for plan mode and build-switch notifications. The model is explicitly primed to attend to `<system-reminder>` tags — the system prompts (`anthropic.txt:75`, `qwen.txt:90`, `polaris.txt:77`) tell the model these tags "contain useful information and reminders" that are "automatically added by the system." This makes `<system-reminder>` the natural delivery mechanism for gauge signals.
+
+This is simpler than the core implementation, which persists a `ContextGaugePart` schema type on assistant messages and renders it in `toModelMessage()`. The plugin just needs the model to *see* the gauge as a system signal; it doesn't need to persist it as a typed part.
 
 ### 4. Compaction Mode State — TODAY: Not feasible → WITH PROPOSAL: Yes
 
