@@ -274,13 +274,33 @@ The `ToolContext.session` API exposes raw mutation power over messages. For upst
 - The proposal does **not** constrain which fields plugins may set. This is intentional — the same "anything goes" model applies to the existing compact tool, and restricting it would require a field-level ACL that doesn't exist anywhere in the codebase.
 
 **What plugins must NOT do:**
-- **Delete or overwrite core identity fields** (`id`, `sessionID`, `role`, `parentID`) — doing so would corrupt the message graph. This is not enforced programmatically but is documented as undefined behavior. (Note: the existing `Session.updateMessage` has the same lack of enforcement.)
+- **Delete or overwrite core identity fields** (`id`, `sessionID`, `role`, `parentID`) — doing so would corrupt the message graph.
+
+**Recommended: identity-field guard.** The `updateMessage` implementation should snapshot `id`, `sessionID`, `role`, and `parentID` before invoking the callback, then assert they are unchanged after. This is a ~5-line guard that prevents the most dangerous class of mutation (message graph corruption) without requiring full schema validation:
+
+```typescript
+async updateMessage(id: string, fn: (draft: MessageInfo) => void) {
+  await Storage.update<MessageV2.Info>(
+    ["message", input.sessionID, id],
+    (draft) => {
+      const frozen = { id: draft.id, sessionID: draft.sessionID, role: draft.role, parentID: draft.parentID }
+      fn(draft)
+      if (draft.id !== frozen.id || draft.sessionID !== frozen.sessionID ||
+          draft.role !== frozen.role || draft.parentID !== frozen.parentID) {
+        throw new Error("updateMessage callback must not modify identity fields (id, sessionID, role, parentID)")
+      }
+    },
+  )
+  Bus.publish(MessageV2.Event.Updated, { info: updated })
+}
+```
+
+This is strictly better than the current `Session.updateMessage` contract (which has no enforcement at all) and makes the API safer for arbitrary plugin authors without adding a field-level ACL.
 
 **What `addPart` guarantees:**
 - Delegates to `Session.updatePart()` (`session/index.ts:379-388`), which writes via `Storage.write` and publishes `MessageV2.Event.PartUpdated`. This is the same path used by the TUI and internal tools.
 - Part types are not constrained — plugins can create custom part types. The TUI will render unrecognized types as text fallbacks.
-
-**Open question for upstream review:** Should `updateMessage` include a lightweight assertion that `id`, `sessionID`, and `role` haven't changed, throwing if they have? This would be a ~3-line guard that prevents the most dangerous class of mutation without requiring full schema validation. The compact tool doesn't need it (it never changes these fields), but a general-purpose plugin API may benefit from the guardrail.
+- **Scope limitation:** `addPart()` is only available during tool execution (via `ToolContext`). It does **not** solve event-time writes — a plugin observing `message.updated` via the `event` hook cannot call `addPart()` because there is no `ToolContext` at that point. This is the root cause of the context gauge gap documented in the feasibility analysis.
 
 ---
 
@@ -319,7 +339,7 @@ For Context Bonsai specifically:
 | TUI tool renderer registration | Nice-to-have, not blocking. Tool results already render as text. Custom renderers are a cosmetic improvement that can come later. |
 | Share/export filtering hook | Very niche. Can be handled by not adding sensitive parts in the first place. |
 | System prompt modification hook | Already possible via `AGENTS.md` / `config.instructions`. The `chat.context` hook also provides the `system` array for programmatic modification. |
-| Secondary LLM call API | No new API *proposed* — but the existing path has caveats. `client.session.prompt({ system })` supports custom system prompts (replaces agent prompt at `prompt.ts:800`), but it always persists a user message and runs the full `loop()` (`prompt.ts:198-210`). The current compact tool avoids this via `SessionProcessor` + `streamText()` with a hidden `summary: true` message (`compact.ts:409-506`), which plugins cannot access. Plugin summarization works by accepting session-mutating calls and filtering artifacts via `chat.context`. If side-effect-free secondary LLM calls become a requirement for multiple plugins, that would warrant a third change (exposing `SessionProcessor` or a raw `streamText` wrapper). |
+| Side-effect-free LLM inference (`infer()`) | **Not yet proposed but likely needed as a third change.** `client.session.prompt({ system })` supports custom system prompts (replaces agent prompt at `prompt.ts:800`), but it always persists a user message (`prompt.ts:202`), runs the full `loop()` including overflow compaction (`prompt.ts:555-570`) and tool resolution (`prompt.ts:613`), and emits events visible to TUI, share, and other plugins. A summary subcall can itself trigger compaction, creating recursive side effects. The current compact tool avoids all of this via `SessionProcessor` + `streamText()` with a hidden `summary: true` message (`compact.ts:409-506`). Filtering artifacts via `chat.context` hides them from the model but they persist in session history, system events, and share/export — a semantic divergence from the core path. For production-quality plugin summarization, an `infer(system, messages) → AsyncIterable<string>` primitive that performs no session mutation would close this gap (~30 additional lines). |
 
 ---
 
@@ -329,7 +349,9 @@ For Context Bonsai specifically:
 |--------|---------------|---------------------|------------|
 | `chat.context` hook | `prompt.ts`, `plugin/src/index.ts` | ~35 | Low — follows `chat.params` pattern exactly |
 | Session API in ToolContext | `prompt.ts`, `plugin/src/tool.ts` | ~55 | Medium — delegates to existing `Storage.update` / `Session` functions |
-| **Total** | **3 files** | **~90 lines** | **Low-Medium** |
+| `infer()` primitive (if needed) | `prompt.ts` or `session/index.ts`, `plugin/src/tool.ts` | ~30 | Medium — wraps `streamText()` without session mutation |
+| **Total (2 changes)** | **3 files** | **~90 lines** | **Low-Medium** |
+| **Total (3 changes)** | **3-4 files** | **~120 lines** | **Medium** |
 
 All changes are additive. No existing behavior changes. No breaking changes to the plugin API. No new dependencies.
 
@@ -337,9 +359,10 @@ All changes are additive. No existing behavior changes. No breaking changes to t
 
 ## Summary
 
-Two changes, ~90 lines of code, zero breaking changes. In exchange, OpenCode's plugin system gains the ability to influence what the LLM actually sees — unlocking context management, RAG, compression, and analytics plugins that are currently impossible.
+Two core changes (~90 lines), plus a likely third (~30 lines), zero breaking changes. In exchange, OpenCode's plugin system gains the ability to influence what the LLM actually sees — unlocking context management, RAG, compression, and analytics plugins that are currently impossible.
 
-| Change | One-Liner | Pattern |
-|--------|-----------|---------|
-| `chat.context` | Transform `WithParts[]` messages before model conversion | Same as `chat.params` |
-| Session API in `ToolContext` | Let tools atomically read/write session messages | Delegates to `Storage.update` |
+| Change | One-Liner | Pattern | Status |
+|--------|-----------|---------|--------|
+| `chat.context` | Transform `WithParts[]` messages before model conversion | Same as `chat.params` | Proposed |
+| Session API in `ToolContext` | Let tools atomically read/write session messages | Delegates to `Storage.update` | Proposed |
+| `infer()` primitive | Side-effect-free LLM call for plugin summarization | Wraps `streamText()` | Likely needed |
