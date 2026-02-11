@@ -89,19 +89,23 @@ This is simpler than the core implementation, which persists a `ContextGaugePart
 
 **How the proposal resolves this:** The plugin maintains its own in-memory state (no dependency on `CompactionModeState`). The `chat.context` hook gives the plugin full control over message content before `toModelMessage()`, so it can apply message ID prefixing directly.
 
-### 5. Message Schema Extensions — TODAY: Not feasible → WITH PROPOSAL: Yes
+### 5. User Control Modes (ask/notify/silent) — OUT OF SCOPE
+
+The README describes three modes for AI autonomy over archiving (ask, notify, silent). These are **not in scope** for the plugin. The plugin will operate automatically — the AI decides when to compact based on context gauge pressure without user confirmation dialogs.
+
+### 6. Message Schema Extensions — TODAY: Not feasible → WITH PROPOSAL: Yes
 
 **How the proposal resolves this:** The `updateMessage(id, fn)` callback receives a mutable draft of `MessageV2.Info`. Plugins can set arbitrary fields (e.g., `archive`, `archivedBy`) without schema changes. The storage layer is raw JSON throughout — `Storage.read()` returns `Bun.file().json()` with a type assertion (`storage.ts:168-176`), and `Storage.update()` reads, mutates, and writes back without validation. Zod schemas exist for type generation but are never applied to the read or write path. Custom fields survive the full cycle by design, not by accident.
 
-### 6. Overflow Detection & Auto-Compaction — TODAY: Not feasible → WITH PROPOSAL: Unnecessary
+### 7. Overflow Detection & Auto-Compaction — TODAY: Not feasible → WITH PROPOSAL: Unnecessary
 
 If a plugin prunes context effectively via `chat.context`, the model sees fewer tokens, the API reports lower usage, and `isOverflow()` won't trigger on the next turn. Built-in compaction acts as a safety net, not a conflict.
 
-### 7. TUI Rendering — TODAY: Not feasible → WITH PROPOSAL: Partial (nice-to-have)
+### 8. TUI Rendering — TODAY: Not feasible → WITH PROPOSAL: Partial (nice-to-have)
 
 No plugin hook for custom TUI components. Tool results render as raw text. This is a cosmetic limitation, not a functional blocker.
 
-### 8. Enterprise Share Filtering — TODAY: Not feasible → WITH PROPOSAL: Not addressed
+### 9. Enterprise Share Filtering — TODAY: Not feasible → WITH PROPOSAL: Not addressed
 
 The `share-next.ts` change filters `ContextGaugePart` from enterprise sync. No plugin hook exists for share/export filtering. Low priority — plugins can avoid adding sensitive parts in the first place.
 
