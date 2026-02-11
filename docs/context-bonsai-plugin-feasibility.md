@@ -2,9 +2,9 @@
 
 ## Executive Summary
 
-**Can Context Bonsai be rewritten as a plugin? Partially, but not fully — and the gaps are significant.**
+**Can Context Bonsai be rewritten as a plugin? Yes — with two targeted changes to OpenCode's plugin surface area.**
 
-A plugin can provide the compact and retrieve **tools** (the LLM-facing interface), but the core value of the feature depends on modifying how OpenCode **constructs the conversation before sending it to the LLM** — and the plugin system has no hook for that. Approximately 40% of the feature could live in a plugin today; the remaining 60% requires either core changes to OpenCode or new plugin hooks that don't yet exist.
+A plugin can provide the compact and retrieve **tools** (the LLM-facing interface), but the core value of the feature depends on modifying how OpenCode **constructs the conversation before sending it to the LLM** — and the plugin system has no hook for that today. Two proposed changes (`chat.context` hook + Session API in `ToolContext`) close this gap entirely. Secondary LLM calls for summarization are already supported via the SDK client's `session.prompt()` and `session.summarize()` endpoints — this has been validated against the codebase. See `docs/proposal-plugin-hooks.md` for the full proposal.
 
 ---
 
@@ -130,7 +130,7 @@ To move Context Bonsai entirely to a plugin, OpenCode would need two changes (se
    - Atomically write `archive`/`archivedBy` metadata to messages
    - Create new message parts
 
-3. **LLM access for summarization** — A way for a plugin tool to make a secondary LLM call with a custom system prompt and the current conversation context. The existing SDK `client` may partially support this via `session.prompt()`, but this needs validation.
+3. **LLM access for summarization** — **Validated.** The SDK `client` exposes `session.prompt()` (POST `/session/{id}/message`) which accepts `system?: string` as a full system prompt override — it *replaces* the agent prompt (`prompt.ts:800`), not appends to it. There is also a dedicated `session.summarize()` (POST `/session/{id}/summarize`) endpoint. Neither route has auth middleware restrictions. The compact tool's existing `generateSummaries()` function (`compact.ts:364-524`) demonstrates secondary LLM calls via `SessionProcessor` + `streamText()`, confirming the pattern works with OAuth credential routing.
 
 ### Not Needed (Previously Considered)
 
@@ -156,7 +156,7 @@ To move Context Bonsai entirely to a plugin, OpenCode would need two changes (se
 | Message ID visibility toggle | No | Yes | Plugin-internal state + `chat.context` |
 | Context gauge display | No | Yes | `event` hook (existing) + `tool` to surface it |
 | Two-phase prepare/execute | No | Yes | Plugin-internal state + `chat.context` |
-| Summarization LLM call | No | Likely | SDK `client.session.prompt()` — needs validation |
+| Summarization LLM call | No | Yes | SDK `client.session.prompt({ system })` — validated, replaces agent prompt |
 | Overflow detection | No | Yes | Built-in compaction acts as safety net; no override needed |
 | TUI rendering | No | Partial | Nice-to-have — tool results render as text |
 | Auto-compaction modes | No | Yes | Plugin-internal state + `chat.context` + `session` API |

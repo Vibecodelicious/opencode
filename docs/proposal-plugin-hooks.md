@@ -228,12 +228,15 @@ const result = await item.execute(args, {
       return undefined
     },
     async updateMessage(id: string, fn: (draft: MessageInfo) => void) {
-      // Delegates to Storage.update which acquires Lock.write(),
-      // reads current state, applies the mutation, and writes atomically.
-      await Storage.update(
+      // Atomic write: acquires Lock.write(), reads, mutates, writes back.
+      const updated = await Storage.update<MessageV2.Info>(
         ["message", input.sessionID, id],
         fn,
       )
+      // Publish event so TUI, event hooks, and share system see the change.
+      // This mirrors Session.updateMessage (session/index.ts:344-349)
+      // but with atomic read-modify-write instead of blind overwrite.
+      Bus.publish(MessageV2.Event.Updated, { info: updated })
     },
     async addPart(part) {
       await Session.updatePart({
@@ -254,6 +257,30 @@ const result = await item.execute(args, {
 - Tools already have `$` (shell access), which is far more dangerous
 - This is the only write path available — the SDK client has no message write endpoints
 - The `permission.ask` hook already exists for plugins that want to gate dangerous operations
+
+---
+
+### Session Write API: Stability Contract
+
+The `ToolContext.session` API exposes raw mutation power over messages. For upstreamability, the contract must be explicit about what plugins can and cannot do, and what side effects they should expect.
+
+**What `updateMessage` guarantees:**
+- **Atomicity** — the callback runs inside `Storage.update()`, which acquires `Lock.write()` before reading current state. No concurrent writer can interleave.
+- **Event publishing** — after the atomic write completes, `Bus.publish(MessageV2.Event.Updated, { info })` fires. This means the TUI, the `event` plugin hook, and the share/sync system all see the change. This mirrors `Session.updateMessage` (`session/index.ts:344-349`) but adds atomicity.
+- **No validation** — the callback receives the raw `MessageV2.Info` draft. OpenCode does **not** re-validate the object after mutation. This matches the existing compact tool's behavior (`compact.ts:649-684`), which sets arbitrary fields like `archive` and `archivedBy` via `Storage.update` without post-write validation.
+
+**What plugins are allowed to mutate:**
+- **Any field on `MessageV2.Info`** — including custom metadata fields not in the Zod schema. OpenCode's storage is JSON-file-based; the schema is used for parsing on read, but `Storage.update` writes the raw object back without re-validation. The compact tool relies on this today.
+- The proposal does **not** constrain which fields plugins may set. This is intentional — the same "anything goes" model applies to the existing compact tool, and restricting it would require a field-level ACL that doesn't exist anywhere in the codebase.
+
+**What plugins must NOT do:**
+- **Delete or overwrite core identity fields** (`id`, `sessionID`, `role`, `parentID`) — doing so would corrupt the message graph. This is not enforced programmatically but is documented as undefined behavior. (Note: the existing `Session.updateMessage` has the same lack of enforcement.)
+
+**What `addPart` guarantees:**
+- Delegates to `Session.updatePart()` (`session/index.ts:379-388`), which writes via `Storage.write` and publishes `MessageV2.Event.PartUpdated`. This is the same path used by the TUI and internal tools.
+- Part types are not constrained — plugins can create custom part types. The TUI will render unrecognized types as text fallbacks.
+
+**Open question for upstream review:** Should `updateMessage` include a lightweight assertion that `id`, `sessionID`, and `role` haven't changed, throwing if they have? This would be a ~3-line guard that prevents the most dangerous class of mutation without requiring full schema validation. The compact tool doesn't need it (it never changes these fields), but a general-purpose plugin API may benefit from the guardrail.
 
 ---
 
@@ -292,7 +319,7 @@ For Context Bonsai specifically:
 | TUI tool renderer registration | Nice-to-have, not blocking. Tool results already render as text. Custom renderers are a cosmetic improvement that can come later. |
 | Share/export filtering hook | Very niche. Can be handled by not adding sensitive parts in the first place. |
 | System prompt modification hook | Already possible via `AGENTS.md` / `config.instructions`. The `chat.context` hook also provides the `system` array for programmatic modification. |
-| Secondary LLM call API | Plugins already have the SDK `client` which can call `session.prompt()`. For direct `streamText()` access, that's a larger API surface discussion. The SDK client is sufficient for summarization use cases. |
+| Secondary LLM call API | **Validated** — no new API needed. The SDK `client` already exposes `session.prompt()` (POST `/session/{id}/message`) which accepts `system?: string` as a full system prompt override (replaces the agent prompt at `prompt.ts:800`), and `session.summarize()` (POST `/session/{id}/summarize`) for dedicated summarization. Both routes have no auth middleware. The compact tool's existing `generateSummaries()` function (`compact.ts:364-524`) demonstrates secondary LLM calls via `SessionProcessor` + `streamText()`, confirming the pattern works. |
 
 ---
 
