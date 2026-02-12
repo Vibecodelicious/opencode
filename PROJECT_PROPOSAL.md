@@ -241,7 +241,7 @@ content using the prune tool.
 injecting the gauge text into the message array. `event` (existing) and
 `chat.params` (existing) for data collection.
 
-**Upstream change required**: Change 6 (enrich transform hook input with
+**Upstream change recommended**: Change 6 (enrich transform hook input with
 `{ sessionID, model }`). Without this change, the plugin must maintain per-session
 caches for session identity and model limits populated from `chat.params` — see
 Change 6 for the full rationale and the workaround if this change is deferred.
@@ -657,8 +657,8 @@ export type ToolContext = {
 
 **Implementation**: `Plugin.list()` (`plugin/index.ts:118`) currently returns
 `Hooks[]` with no source identity. Changing its return type would break 5
-existing call sites that expect `Hooks[]` (in `auth.ts`, `provider.ts`,
-`auth CLI`, and `registry.ts`). Instead, add a new `Plugin.listDetailed()`
+existing call sites that expect `Hooks[]` (`registry.ts:50`,
+`provider.ts:861`, `auth.ts:13`, `cli/cmd/auth.ts:310`, `cli/cmd/auth.ts:326`). Instead, add a new `Plugin.listDetailed()`
 API that returns `Array<{ name: string; hooks: Hooks }>`, associating each
 `Hooks` entry with its source plugin name — the npm package name for installed
 plugins (`pkg` at `plugin/index.ts:60`), or the filename namespace for custom
