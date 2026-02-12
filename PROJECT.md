@@ -80,35 +80,40 @@ No message read/write. No languageModel.
 - Track token usage via `event` hook (message.updated events include tokens)
 - Get model context limit via `chat.params` or system transform hooks (cache it)
 
-### The ONE Hard Blocker
+### Hard Blockers
 
-**Plugin ToolContext lacks session message read/write and languageModel access.**
-Without this, the prune and retrieve tools cannot:
-- Read messages to identify what to archive
-- Write archive metadata to messages
-- Call the LLM for summarization
+**Plugin ToolContext lacks `languageModel` and `updateMessage()` access.**
+- **Message read**: Already works — `messages` leaks through the `...ctx` spread
+  and `as unknown as PluginToolContext` cast in `registry.ts:fromPlugin()` (line
+  67). Formalizing this on the type is optional (zero implementation work).
+- **Message write**: Requires adding `updateMessage(id, fn)` to ToolContext,
+  delegating to `Storage.update()` (atomic read-modify-write).
+- **LLM for summarization**: Requires adding `languageModel` to ToolContext,
+  delegating to `Provider.getLanguage()`.
 
 Everything else works with existing hooks.
 
-### Minimum Upstream Change Required
+### Minimum Upstream Changes Required
 
-**Enhance Plugin ToolContext with a session API** — add `messages()`,
-`message(id)`, `updateMessage(id, fn)`, and `languageModel` to ToolContext.
-Implementation delegates to existing internal APIs (`Session.messages`,
-`MessageV2.get`, `Storage.update`, `Provider.getLanguage`). See
-PROJECT_RESEARCH.md Section 9 for details.
+1. **Add `languageModel: LanguageModelV2` to ToolContext** (~10 lines across 3
+   files: `plugin/src/tool.ts`, `tool/tool.ts`, `session/prompt.ts`)
+2. **Add `updateMessage(id, fn)` to ToolContext** (~10 lines across 2 files:
+   `plugin/src/tool.ts`, `tool/registry.ts`)
 
 **Nice-to-have**: Enrich `experimental.chat.messages.transform` input from `{}`
 to `{ sessionID, model }` for easier gauge computation.
 
-### Metadata Persistence Concern
+### Metadata Persistence (RESOLVED)
 
-`Session.updateMessage()` uses `Storage.write()` (blind overwrite), which could
-clobber custom fields added by the plugin. The proposed `updateMessage(id, fn)`
-uses `Storage.update()` (atomic read-modify-write) which preserves other fields.
-But if OpenCode core later calls `Session.updateMessage()` on the same message,
-the plugin's fields could be lost. Need to audit call sites or use sidecar
-storage.
+`Session.updateMessage()` would destroy plugin fields through Zod stripping
+(`fn()` wrapper calls `MessageV2.Info.parse()` which strips unknown keys) and
+blind `Storage.write()`. An audit of **every** `Session.updateMessage()` call
+site (`prompt.ts`, `processor.ts`, `compaction.ts`, `summary.ts`, `plan.ts`,
+`cli/cmd/debug/agent.ts`) confirms that none of them update old, finalized
+messages — every call either creates new messages or updates the current
+in-progress message. Plugin-added fields on old messages (via
+`Storage.update()`, which bypasses both layers) are safe from clobber. Direct
+message annotation is used instead of sidecar storage.
 
 ## Status / Next Steps
 

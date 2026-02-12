@@ -179,8 +179,10 @@ const Base = z.object({
 The upstream Part union includes `CompactionPart` but NOT `ContextGaugePart`.
 
 **Implication**: The plugin cannot rely on schema-level archive fields on
-upstream. It must store archive metadata through a different mechanism (custom
-metadata fields that survive JSON storage, or its own external storage).
+upstream. It stores archive metadata as custom fields on the message JSON via
+`Storage.update()` (atomic read-modify-write), which preserves them through
+storage round-trips. See Section 9 and Section 10 question 1 for the clobber
+risk audit.
 
 ---
 
@@ -234,10 +236,11 @@ added custom fields via `Storage.update()`, a subsequent `Session.updateMessage(
 call by OpenCode core would **erase them**. This is a significant concern for
 metadata persistence.
 
-**Mitigation options**:
-- Plugin uses `Storage.update()` directly (but Storage is not exposed to plugins)
-- Plugin maintains its own sidecar storage
-- Upstream changes `Session.updateMessage` to use `Storage.update()`
+**Resolution**: Expose `Storage.update()` to plugins via `ctx.updateMessage(id,
+fn)` on the plugin ToolContext (see Section 9, Change 2). An audit of all
+`Session.updateMessage()` call sites confirms that core code never touches old
+finalized messages (see Section 10, question 1), so the clobber risk is
+theoretical — but `Storage.update()` provides defense-in-depth.
 
 ---
 
@@ -394,40 +397,59 @@ the water without ToolContext enhancements.
 
 ## 9. Minimum Upstream Changes Required
 
-### Change 1: Enhance Plugin ToolContext with Session API
+### Change 1: Add `languageModel` to Plugin ToolContext
 
 Add to `packages/plugin/src/tool.ts` ToolContext:
 
 ```typescript
-session: {
-  messages(): Promise<Array<{ info: MessageInfo; parts: Part[] }>>
-  message(id: string): Promise<{ info: MessageInfo; parts: Part[] } | undefined>
-  updateMessage(id: string, fn: (draft: MessageInfo) => void): Promise<void>
-  languageModel: LanguageModelV2
-}
+languageModel: LanguageModelV2
 ```
 
 **Implementation site**: `packages/opencode/src/session/prompt.ts`,
-`resolveTools()` function (line ~680), inside the `context()` helper. Each
-method delegates to existing internal APIs:
+`resolveTools()` function (line ~680), inside the `context()` helper. Delegates
+to `Provider.getLanguage(model)` (already resolved in `resolveTools` scope).
+Passes to plugins automatically via the `...ctx` spread in
+`registry.ts:fromPlugin()` (line 67).
 
-- `messages()` → `Session.messages({ sessionID })`
-- `message(id)` → `MessageV2.get({ sessionID, messageID: id })`
-- `updateMessage(id, fn)` → `Storage.update(["message", sessionID, id], fn)` +
-  `Bus.publish(MessageV2.Event.Updated, ...)`
-- `languageModel` → `Provider.getLanguage(model)` (already resolved in
-  `resolveTools` scope)
+**Note on `messages`**: Plugin tools already receive the `messages` array at
+runtime through the `...ctx` spread and `as unknown as PluginToolContext` cast
+in `registry.ts:67-71`. Formalizing this on the ToolContext type is a type-only
+change with zero implementation work.
 
-**Why `Storage.update()` not `Session.updateMessage()`**: Session.updateMessage
-uses `Storage.write()` (blind overwrite), which would clobber any existing
-fields. `Storage.update()` does atomic read-modify-write, preserving fields the
-plugin didn't touch.
+### Change 2: Add `updateMessage()` to Plugin ToolContext
+
+Add to `packages/plugin/src/tool.ts` ToolContext:
+
+```typescript
+updateMessage(id: string, fn: (draft: MessageInfo) => void): Promise<void>
+```
+
+**Implementation site**: `packages/opencode/src/tool/registry.ts`,
+`fromPlugin()` function (line 60). Unlike `languageModel`, this cannot be added
+to the internal `Tool.Context` and spread through — it must be implemented
+directly in `fromPlugin()`, delegating to:
+
+- `Storage.update(["message", ctx.sessionID, id], fn)` — atomic read-modify-write
+- `Bus.publish(MessageV2.Event.Updated, ...)` — notify subscribers
+
+**Why `Storage.update()` not `Session.updateMessage()`**: `Session.updateMessage`
+(`session/index.ts:378`) uses `Storage.write()` (blind overwrite).
+`Storage.update()` (`storage/storage.ts:179`) does atomic read-modify-write,
+preserving fields the callback didn't touch.
+
+**Clobber risk audit**: An audit of every `Session.updateMessage()` call site
+(`prompt.ts`, `processor.ts`, `compaction.ts`, `summary.ts`, `plan.ts`,
+`cli/cmd/debug/agent.ts`) confirms
+that **none of them update old, finalized messages**. Every call either creates
+new messages or updates the current in-progress message. Messages eligible for
+plugin annotation are always old and finalized, so core code will not overwrite
+the plugin's fields. Using `Storage.update()` is defense-in-depth.
 
 **Risk**: This exposes write access to messages. Mitigated by:
 - Plugins already have shell access (`$`) which is more dangerous
 - Identity-field guard can prevent corruption (throw if id/sessionID/role change)
 
-### Change 2: Enrich `experimental.chat.messages.transform` Input (nice-to-have)
+### Change 3: Enrich `experimental.chat.messages.transform` Input (nice-to-have)
 
 Current: `input: {}`
 Proposed: `input: { sessionID: string; model: Model }`
@@ -443,11 +465,15 @@ makes the plugin simpler and less fragile.
 
 ## 10. Open Questions
 
-1. **Metadata persistence**: If the plugin writes `archive`/`archivedBy` fields
-   via `Storage.update()`, will OpenCode core's `Session.updateMessage()` (which
-   uses `Storage.write()`) ever clobber them? Need to audit all
-   `Session.updateMessage()` call sites to verify if they ever re-write messages
-   that a plugin might have annotated.
+1. **Metadata persistence**: ~~RESOLVED.~~ Audited every `Session.updateMessage()`
+   call site (`prompt.ts`, `processor.ts`, `compaction.ts`, `summary.ts`,
+   `plan.ts`, `cli/cmd/debug/agent.ts`). None of them update old, finalized
+   messages — every call either creates new messages or updates the current
+   in-progress message. Plugin-added fields on old messages are safe from
+   clobber. Note: `Session.updateMessage()` has TWO clobber mechanisms — Zod
+   stripping (the `fn()` wrapper at `util/fn.ts:5` calls
+   `MessageV2.Info.parse()` which strips unknown keys) and blind
+   `Storage.write()` — but neither fires on old finalized messages.
 
 2. **The `experimental` prefix**: Both transform hooks are marked
    `experimental`. Could they be removed or changed in a future upstream
