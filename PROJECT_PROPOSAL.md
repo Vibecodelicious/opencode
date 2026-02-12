@@ -9,10 +9,12 @@ context while preserving summaries, and to retrieve the original content if
 needed later. The goal is to avoid catastrophic batch compaction by staying ahead
 of the context limit through continuous, targeted pruning.
 
-**The plugin requires two upstream changes to OpenCode**: exposing
-`languageModel` and `updateMessage(id, fn)` on the plugin `ToolContext`. All
-other functionality maps onto existing upstream plugin hooks, including message
-read access that already leaks through to plugins via the internal context.
+**The plugin requires three small upstream changes to OpenCode**: a `metadata`
+bag on the message schema (for plugin data persistence), `languageModel` on the
+plugin `ToolContext` (for summarization), and `updateMessage(id, fn)` on the
+plugin `ToolContext` (for writing metadata). All other functionality maps onto
+existing upstream plugin hooks, including message read access that already leaks
+through to plugins via the internal context.
 
 ---
 
@@ -82,8 +84,8 @@ phases by checking whether arguments are present.
 
 **Upstream hook used**: `tool` (existing — `packages/plugin/src/index.ts`)
 
-**Upstream changes required**: `languageModel` and `updateMessage()` on
-ToolContext. See "Required Upstream Changes" below.
+**Upstream changes required**: `metadata` on message schema, `languageModel`
+and `updateMessage()` on ToolContext. See "Required Upstream Changes" below.
 
 ### Feature 2: Retrieve Tool
 
@@ -261,67 +263,102 @@ change with zero implementation work.
 
 ---
 
-## Archive Storage: Direct Message Annotation
+## Archive Storage: Namespaced Message Metadata
 
-The plugin writes archive metadata directly onto messages using
-`ctx.updateMessage()`, which delegates to `Storage.update()` (atomic
-read-modify-write). This is the same approach used by the `surgical_compaction`
-branch's direct integration.
+The plugin stores archive data in a `metadata` bag on the message schema — a
+general-purpose extension point for plugins. Each plugin namespaces its data by
+package name, preventing cross-plugin clobbering.
 
 **How it works**: When the prune tool archives a range, it calls
 `ctx.updateMessage(id, fn)` on the anchor message (the first message in the
-range) to add archive fields:
+range) to write archive data into the plugin's namespace:
 
 ```typescript
 await ctx.updateMessage(fromId, (draft) => {
-  draft.archive = {
-    summary: "Debugging attempts - tried token refresh, session storage...",
-    indexTerms: ["auth", "debugging", "middleware"],
-    rangeEnd: toId,
+  draft.metadata ??= {}
+  draft.metadata["context-bonsai"] = {
+    archive: {
+      summary: "Debugging attempts - tried token refresh, session storage...",
+      indexTerms: ["auth", "debugging", "middleware"],
+      rangeEnd: toId,
+    },
   }
 })
 // Mark follower messages as archived-by
 for (const msg of rangeFollowers) {
   await ctx.updateMessage(msg.info.id, (draft) => {
-    draft.archivedBy = fromId
+    draft.metadata ??= {}
+    draft.metadata["context-bonsai"] = { archivedBy: fromId }
   })
 }
 ```
 
-**Why this is safe**: `Session.updateMessage()` (`session/index.ts:378`) would
-destroy plugin fields through two mechanisms: Zod stripping (the `fn()` wrapper
-at `util/fn.ts:5` calls `MessageV2.Info.parse()` which strips unknown keys) and
-blind `Storage.write()` overwrite. However, an audit of every
-`Session.updateMessage()` call site in the codebase (`prompt.ts`,
-`processor.ts`, `compaction.ts`, `summary.ts`, `plan.ts`,
-`cli/cmd/debug/agent.ts`) confirms that **none of them update old, finalized
-messages**. Every call either creates a new message or updates the current
-in-progress assistant/user message from the active turn. Messages eligible for
-pruning are always old and finalized — no core code path will overwrite them.
+**Why metadata survives**: The `metadata` field is part of the `MessageV2.Base`
+schema (`z.record(z.unknown()).optional()`), so Zod preserves it through
+parsing. `Session.updateMessage()` (`session/index.ts:378`) carries the field
+through naturally because it's a known schema field on the in-memory message
+object. No schema bypass needed.
 
 The plugin's `ctx.updateMessage()` uses `Storage.update()` (atomic
-read-modify-write) which bypasses both Zod stripping and blind overwrite,
-preserving all existing fields on the message. This is defense-in-depth: the
-primary safety guarantee is the "no core code touches old messages" invariant;
-`Storage.update()` is the backup.
+read-modify-write) for safe concurrent writes, but this is just good practice —
+not a workaround for schema issues.
+
+**Namespacing**: Each plugin writes only to its own key within `metadata`
+(e.g., `metadata["context-bonsai"]`). Other plugins use their own keys. No
+enforcement mechanism is needed — plugins already have shell access, so the
+trust boundary is established at the plugin installation level. This follows the
+same convention as npm `package.json` keys, Kubernetes annotations, and HTTP
+headers.
 
 **How it's used**:
-- The **prune tool** writes `archive`/`archivedBy` fields via `ctx.updateMessage()`
-- The **retrieve tool** reads archive metadata from `ctx.messages`
-- The **transform hook** checks each message for `archive`/`archivedBy` fields
-  to identify which messages to replace with placeholders
-
-**Advantages over a separate sidecar file**:
-- No sync risk between archive index and actual messages
-- Archive metadata survives alongside the messages it describes
-- No extra file I/O per turn in the transform hook
-- Mirrors the proven approach from the `surgical_compaction` branch
+- The **prune tool** writes archive data via `ctx.updateMessage()` into
+  `metadata["context-bonsai"]`
+- The **retrieve tool** reads archive data from `ctx.messages` by checking
+  `msg.info.metadata?.["context-bonsai"]`
+- The **transform hook** checks each message for archive metadata to identify
+  which messages to replace with placeholders
 
 ---
 
 ## Required Upstream Changes
 
-### Change 1: Add `languageModel` to Plugin ToolContext
+### Change 1: Add `metadata` to Message Schema
+
+**What**: Add a general-purpose metadata bag to the message base schema so
+plugins can persist custom data alongside messages.
+
+**Schema change** (in `packages/opencode/src/session/message-v2.ts`):
+
+```typescript
+const Base = z.object({
+  id: z.string(),
+  sessionID: z.string(),
+  metadata: z.record(z.unknown()).optional(),  // <-- new
+})
+```
+
+**Estimated scope**: 1 line.
+
+**Why this is needed**: Plugins need to persist data alongside messages (archive
+summaries, index terms, pruning markers). Without a schema-blessed field, custom
+data would be stripped by Zod's default `.parse()` behavior (which removes
+unknown keys). By adding `metadata` to the schema, plugin data survives all
+existing code paths — including `Session.updateMessage()` which wraps inputs
+through `fn(MessageV2.Info, ...)` (`util/fn.ts:5`).
+
+**Why this is general-purpose**: Any plugin that needs to annotate messages
+benefits. The `z.record(z.unknown())` type imposes no structure — each plugin
+validates its own namespace when reading. If upstream later wants per-plugin
+schema validation, they can evolve toward a hook-based schema registration
+system without breaking the existing convention.
+
+**Session resumption safety**: `Storage.read()` (`storage/storage.ts:174`) loads
+message JSON via `Bun.file().json()` with an `as T` cast — no Zod parse on the
+read path. Custom metadata fields survive storage round-trips regardless of
+schema, but having `metadata` in the schema means they also survive any code
+path that does parse messages through Zod.
+
+### Change 2: Add `languageModel` to Plugin ToolContext
 
 **What**: Expose the session's pre-configured `LanguageModelV2` instance on the
 plugin `ToolContext`.
@@ -378,7 +415,7 @@ triggered, no events emitted.
 calls benefits from this. Examples: summarization, classification, content
 extraction, automated labeling.
 
-### Change 2: Add `updateMessage()` to Plugin ToolContext
+### Change 3: Add `updateMessage()` to Plugin ToolContext
 
 **What**: Expose an atomic message update function on the plugin `ToolContext`.
 
@@ -409,9 +446,10 @@ const pluginCtx = {
 ```
 
 This uses `Storage.update()` (`storage/storage.ts:179`) — atomic
-read-modify-write with a write lock — which preserves all existing fields on the
-message. This is distinct from the existing `Session.updateMessage()`
-(`session/index.ts:378`) which uses `Storage.write()` (blind overwrite).
+read-modify-write with a write lock. This is preferred over
+`Session.updateMessage()` (`session/index.ts:378`) because `Storage.update()`
+reads the current state from disk before applying the mutation, avoiding stale
+writes if multiple operations target the same message.
 
 **Files changed**:
 
@@ -422,28 +460,9 @@ message. This is distinct from the existing `Session.updateMessage()`
 
 **Estimated scope**: ~10 lines across 2 files.
 
-**Why `Storage.update()` and not `Session.updateMessage()`**: An audit of all
-`Session.updateMessage()` call sites (`prompt.ts`, `processor.ts`,
-`compaction.ts`, `summary.ts`, `plan.ts`, `cli/cmd/debug/agent.ts`) confirms
-that core code never overwrites old finalized messages — every call either
-creates new messages or updates the current in-progress message. However,
-`Session.updateMessage()` has TWO layers that would destroy plugin fields if it
-were ever called on an annotated message:
-1. **Zod stripping**: It's wrapped with `fn(MessageV2.Info, ...)` (`util/fn.ts:5`),
-   which calls `MessageV2.Info.parse(input)`. Zod's default behavior strips
-   unknown keys, so `archive`/`archivedBy` fields would be removed before the
-   write even reaches storage.
-2. **Blind overwrite**: It uses `Storage.write()` which overwrites the entire
-   JSON file, discarding any fields not in the written object.
-
-Using `Storage.update()` bypasses both layers — it reads the existing JSON,
-applies the mutation function, and writes back, preserving all fields. This is
-defense-in-depth: the "no core code touches old messages" invariant is the
-primary safety guarantee, and `Storage.update()` is the backup.
-
-**Safety guard**: The implementation should throw if the `fn` callback attempts
-to change identity fields (`id`, `sessionID`, `role`), preventing plugin bugs
-from corrupting message data.
+**Safety guard**: The implementation should throw if the callback attempts to
+change identity fields (`id`, `sessionID`, `role`), preventing plugin bugs from
+corrupting message data.
 
 ### Optional: Formalize `messages` on Plugin ToolContext
 
@@ -522,9 +541,9 @@ plugins to cache this data from other hooks.
 │    │   • Cache model.limit.context for gauge %           │
 └─────────────────────────────────────────────────────────┘
 
-Archive metadata lives directly on message JSON:
-  msg.archive = { summary, indexTerms, rangeEnd }
-  msg.archivedBy = <anchor message ID>
+Archive metadata lives in namespaced message metadata:
+  msg.metadata["context-bonsai"] = { archive: { summary, indexTerms, rangeEnd } }
+  msg.metadata["context-bonsai"] = { archivedBy: <anchor message ID> }
 ```
 
 ---
@@ -561,9 +580,9 @@ The transform hook and the prune/retrieve tools operate on different data views:
 
 These never conflict: the transform hook produces the view the LLM sees, while the
 tools access the underlying data. A prune executed on turn N writes archive
-metadata to the messages via `Storage.update()`; the transform hook on turn N+1
-sees the metadata on the freshly-loaded messages and renders them as placeholders.
-There is no race.
+metadata to the messages via `ctx.updateMessage()`; the transform hook on turn
+N+1 sees the metadata on the freshly-loaded messages and renders them as
+placeholders. There is no race.
 
 ### Concurrent Sessions
 
