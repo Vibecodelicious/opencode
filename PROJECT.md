@@ -91,8 +91,8 @@ No message read/write. No languageModel.
 - **Message read**: Already works at runtime — `messages` leaks through the
   `...ctx` spread and `as unknown as PluginToolContext` cast in
   `registry.ts:fromPlugin()` (line 67). Must be formalized on the ToolContext
-  type to avoid depending on an undocumented leak (zero implementation work,
-  type-only change).
+  type AND explicitly mapped in `fromPlugin()` to avoid depending on an
+  undocumented leak.
 - **Message write**: Requires adding `updateMessage(id, fn)` to ToolContext,
   delegating to `Storage.update()` (atomic read-modify-write).
 - **LLM for summarization**: Requires adding `languageModel` to ToolContext,

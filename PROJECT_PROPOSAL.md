@@ -137,7 +137,7 @@ This is the core mechanism that makes pruning effective. On every turn, before
 the conversation is sent to the LLM, the plugin intercepts the message list and:
 
 1. **Replaces anchor messages with placeholders.** For each message that has
-   archive metadata in `metadata["context-bonsai"].archive`, the plugin replaces
+   archive metadata in `metadata[ctx.pluginID].archive`, the plugin replaces
    its parts with a single text part:
    ```
    [PRUNED: msg_abc to msg_xyz]
@@ -319,7 +319,7 @@ package name, preventing cross-plugin clobbering.
 ```typescript
 await ctx.updateMessage(fromId, (draft) => {
   draft.metadata ??= {}
-  draft.metadata["context-bonsai"] = {
+  draft.metadata[ctx.pluginID] = {
     archive: {
       summary: "Debugging attempts - tried token refresh, session storage...",
       indexTerms: ["auth", "debugging", "middleware"],
@@ -365,7 +365,7 @@ const ArchiveSchema = z.object({
   }).optional(),
 })
 // On read:
-const data = ArchiveSchema.parse(msg.info.metadata?.["context-bonsai"] ?? {})
+const data = ArchiveSchema.parse(msg.info.metadata?.[ctx.pluginID] ?? {})
 ```
 
 This gives the plugin type safety without requiring upstream to know about the
@@ -373,7 +373,7 @@ plugin's data shape.
 
 **How it's used**:
 - The **prune tool** writes archive data via `ctx.updateMessage()` into
-  `metadata["context-bonsai"]`
+  `metadata[ctx.pluginID]`
 - The **retrieve tool** finds anchor messages via `ctx.messages`, then clears
   their metadata via `ctx.updateMessage()` to restore the range
 - The **transform hook** finds anchor messages with archive metadata, replaces
@@ -448,8 +448,9 @@ the `context()` helper inside `resolveTools()`) does not currently include
 available in `resolveTools()` scope (`input.model`, which is a
 `Provider.Model`), and `Provider.getLanguage(model)` (`provider/provider.ts:1110`)
 returns the `LanguageModelV2` instance. This is an async call, so it should be
-resolved once in `resolveTools()` and threaded through. It passes to plugins
-automatically via the `...ctx` spread in `registry.ts:fromPlugin()` (line 67).
+resolved once in `resolveTools()` and threaded through. For the same reasons
+as Change 4 (`messages`), `languageModel` should be explicitly mapped onto
+`pluginCtx` in `fromPlugin()` rather than relying on the `...ctx` spread.
 
 **Files changed**:
 
@@ -458,9 +459,9 @@ automatically via the `...ctx` spread in `registry.ts:fromPlugin()` (line 67).
 | `packages/plugin/src/tool.ts` | Add `languageModel: LanguageModelV2` to `ToolContext` type |
 | `packages/opencode/src/tool/tool.ts` | Add `languageModel: LanguageModelV2` to internal `Tool.Context` type |
 | `packages/opencode/src/session/prompt.ts` | Resolve `languageModel` in `resolveTools()`, add to `context()` helper |
-| `packages/opencode/src/tool/registry.ts` | Already passes through via `...ctx` spread — no change needed |
+| `packages/opencode/src/tool/registry.ts` | Add explicit `languageModel: ctx.languageModel` to `pluginCtx` |
 
-**Estimated scope**: ~10 lines across 3 files.
+**Estimated scope**: ~10 lines across 4 files.
 
 **Why the plugin needs this**: The prune tool calls the LLM to generate
 summaries. The `LanguageModelV2` instance from `Provider.getLanguage()` has all
@@ -507,6 +508,7 @@ const pluginCtx = {
   directory: Instance.directory,
   worktree: Instance.worktree,
   messages: ctx.messages,          // Change 4: explicit mapping
+  languageModel: ctx.languageModel, // Change 2: explicit mapping
   pluginID: pluginName,            // Change 5: from plugin loading pipeline
   updateMessage: async (id: string, fn: (draft: any) => void) => {
     const updated = await Storage.update(["message", ctx.sessionID, id], (draft) => {
@@ -700,7 +702,7 @@ plugins to cache this data from other hooks.
 └─────────────────────────────────────────────────────────┘
 
 Archive metadata lives on anchor messages only:
-  msg.metadata["context-bonsai"] = { archive: { summary, indexTerms, rangeEnd } }
+  msg.metadata[pluginID] = { archive: { summary, indexTerms, rangeEnd } }
   Followers carry no metadata — identified by position between anchor and rangeEnd
 ```
 
