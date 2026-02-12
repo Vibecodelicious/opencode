@@ -111,9 +111,8 @@ Everything else works with existing hooks.
    `plugin/src/tool.ts`, `tool/registry.ts`)
 5. **Add `pluginID` to ToolContext** (~5 lines across 3 files:
    `plugin/src/tool.ts`, `plugin/index.ts`, `tool/registry.ts`)
-
-**Nice-to-have**: Enrich `experimental.chat.messages.transform` input from `{}`
-to `{ sessionID, model }` for easier gauge computation.
+6. **Enrich transform hook input** (1 line at `prompt.ts:620` — add
+   `{ sessionID, model }` to eliminate fragile per-session side caches)
 
 ### Metadata Persistence
 
