@@ -55,14 +55,14 @@ When installed, the plugin:
 The LLM calls this tool to archive a range of messages. It operates in two
 phases:
 
-**Phase 1 — Enable message ID visibility.** The LLM calls `prune` with no
-arguments. The plugin sets an internal flag. On the next turn, the message
-transform hook (see Feature 3) prefixes every message with its ID so the LLM can
-see and reference them. The tool returns a message like "[Message IDs are now
-visible. Identify the range to prune and call prune again with from_id and
-to_id.]"
+**Phase 1 — Enable message ID visibility.** The LLM calls `context-bonsai:prune`
+with no arguments. The plugin sets an internal flag. On the next turn, the
+message transform hook (see Feature 3) prefixes every message with its ID so the
+LLM can see and reference them. The tool returns a message like "[Message IDs are
+now visible. Identify the range to prune and call context-bonsai:prune again with
+from_id and to_id.]"
 
-**Phase 2 — Archive the range.** The LLM calls `prune` with `from_id`,
+**Phase 2 — Archive the range.** The LLM calls `context-bonsai:prune` with `from_id`,
 `to_id`, and a `reason`. The plugin:
 1. Reads the messages in the range from `ctx.messages` (the full conversation
    array already available on the tool context — see "Upstream State" below)
@@ -101,7 +101,7 @@ and `updateMessage()` on ToolContext. See "Required Upstream Changes" below.
 
 ### Feature 2: Retrieve Tool
 
-The LLM calls this tool with an `anchor_id` argument (the ID of the anchor
+The LLM calls `context-bonsai:retrieve` with an `anchor_id` argument (the ID of the anchor
 message to restore). The LLM knows which anchors exist because the transform
 hook renders placeholders with visible anchor and range-end IDs (see Feature 3).
 
