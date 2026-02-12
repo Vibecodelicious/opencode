@@ -110,12 +110,12 @@ Everything else works with existing hooks.
    `plugin/src/tool.ts`, `tool/registry.ts`)
 4. **Formalize `messages` on ToolContext** (type + explicit runtime mapping,
    `plugin/src/tool.ts` + `tool/registry.ts`)
-
-### Recommended Upstream Changes (have workarounds)
-
 5. **Add `pluginID` to ToolContext** (~15 lines across 3 files:
    `plugin/src/tool.ts`, `plugin/index.ts`, `tool/registry.ts` — adds new
    `Plugin.listDetailed()` API; `Plugin.list()` unchanged)
+
+### Recommended Upstream Change (has workaround)
+
 6. **Enrich transform hook input** (2 lines across 2 files: `prompt.ts:620`
    runtime + `plugin/src/index.ts:198` type — add `{ sessionID, model }` to
    eliminate fragile per-session side caches)

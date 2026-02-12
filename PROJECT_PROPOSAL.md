@@ -12,14 +12,14 @@ destructively summarized and no longer recoverable. The goal is to avoid
 triggering that built-in compaction by staying ahead of the context limit through
 continuous, targeted pruning.
 
-**The plugin requires four small upstream changes to OpenCode**: a `metadata`
+**The plugin requires five small upstream changes to OpenCode**: a `metadata`
 bag on the message schema (for plugin data persistence), `languageModel` on
 `ToolContext` (for summarization), `updateMessage(id, fn)` on `ToolContext`
-(for writing metadata), and `messages` formalized on the plugin `ToolContext`
-(for reading the conversation). Two additional changes are **recommended** for
-production quality: `pluginID` on `ToolContext` (for consistent metadata
-namespacing) and enriched transform hook input (for session/model context
-without fragile side caches). Both recommended changes have workarounds
+(for writing metadata), `messages` formalized on the plugin `ToolContext`
+(for reading the conversation), and `pluginID` on `ToolContext` (for consistent
+metadata namespacing via a new `Plugin.listDetailed()` API). One additional
+change is **recommended**: enriched transform hook input (for session/model
+context without fragile side caches). The recommended change has a workaround
 described below.
 
 ---
@@ -265,10 +265,20 @@ has decreased even if the gauge hasn't updated yet.
 **Event dispatch timing**: Plugin event handlers are invoked without `await`
 (`plugin/index.ts:132`) — the bus fires them as fire-and-forget. If the plugin's
 event handler updates its token cache asynchronously, the cache update could race
-with the next transform hook invocation. In practice this is unlikely to cause
-visible issues (the transform hook fires on a later turn, well after the event
-handler completes), but the plugin should use synchronous mutation of its cache
-data structure to eliminate the race entirely.
+with the next transform hook invocation.
+
+**Strategy**: The plugin's event handler must use **synchronous mutation** of its
+cache data structure — no `await` between reading the event payload and writing
+to the cache. Concretely: the `event` hook handler extracts token counts from
+`message.updated` events and writes them to a `Map<sessionID, TokenData>` in a
+single synchronous assignment. Since JavaScript is single-threaded, a synchronous
+write cannot be interleaved with a transform hook read. This eliminates the race
+regardless of whether the event handler's outer `async` wrapper is awaited. As a
+**fallback**, if the gauge cache has no data for the current session (e.g., first
+turn, or edge case where the event hasn't fired yet), the gauge injection is
+simply skipped for that turn — the LLM operates without a gauge until the next
+turn when the cache is populated. This degrades gracefully rather than showing
+stale or incorrect numbers.
 
 ### Feature 5: System Prompt Guidance
 
@@ -633,14 +643,6 @@ runtime break.
 | `packages/plugin/src/tool.ts` | Add `messages` to `ToolContext` type |
 | `packages/opencode/src/tool/registry.ts` | Add explicit `messages: ctx.messages` to `pluginCtx` |
 
----
-
-## Recommended Upstream Changes
-
-Changes 5 and 6 improve production quality and developer ergonomics but are not
-hard blockers. The plugin functions without them, using the workarounds described
-in each section.
-
 ### Change 5: Add `pluginID` to Plugin ToolContext
 
 **What**: Expose the plugin's package name on the tool context so plugins can
@@ -681,6 +683,13 @@ manually.
 `plugin/index.ts`, `tool/registry.ts`). The new `listDetailed()` API wraps the
 existing loading pipeline with name tracking. `Plugin.list()` remains unchanged,
 avoiding regressions in auth/provider flows.
+
+---
+
+## Recommended Upstream Change
+
+Change 6 improves developer ergonomics but is not a hard blocker. The plugin
+functions without it, using the workaround described below.
 
 ### Change 6: Enrich Transform Hook Input
 
@@ -817,15 +826,27 @@ metadata to the messages via `ctx.updateMessage()`; the transform hook on turn
 N+1 sees the metadata on the freshly-loaded messages and renders them as
 placeholders. There is no race.
 
-**Within-step staleness**: Messages are loaded from storage once per step iteration
-(`prompt.ts:285`) and assigned to the tool context at `prompt.ts:691`. All tool
-calls in the same step share this snapshot. If
-the LLM makes multiple tool calls in one response (e.g., prune then immediately
-retrieve), the second tool call sees the stale `ctx.messages` without metadata
-changes from the first. The retrieve tool enforces this with a same-step guard (see Feature 2) — if the
-anchor was pruned in the current step, retrieve returns an error instructing the
-LLM to retry on the next turn. Prune operations take effect on the next step
-iteration when messages are reloaded from storage.
+**Within-step tool snapshot (defined behavior)**: Messages are loaded from
+storage once per step iteration (`prompt.ts:285`) and assigned to the tool
+context at `prompt.ts:691`. All tool calls in the same step share this snapshot.
+This is **by design, not a bug** — it means tool calls within a single LLM
+response operate on a consistent view of the conversation.
+
+The consequence: if the LLM calls `context-bonsai:prune` and then
+`context-bonsai:retrieve` in the same response, the retrieve sees `ctx.messages`
+without the prune's metadata changes. The plugin enforces deterministic behavior
+with a **same-step guard** (see Feature 2):
+
+- The plugin tracks which anchors were pruned in the current step
+- `context-bonsai:retrieve` checks this set before proceeding
+- If the anchor was pruned in the current step, retrieve returns a deterministic
+  error: "This archive was created in the current step. Call
+  context-bonsai:retrieve on the next turn."
+- The LLM retries on the next turn, when messages are reloaded from storage and
+  the prune metadata is visible
+
+This eliminates ambiguous behavior — every same-step prune/retrieve sequence
+produces a clear, actionable error rather than silent inconsistency.
 
 **Reminder injection visibility**: `insertReminders()` (`prompt.ts:540`) modifies
 `msgs` *before* the clone at line 599. Since `ctx.messages` references `msgs`,
