@@ -570,16 +570,34 @@ export type ToolContext = {
 }
 ```
 
-**Estimated scope**: Zero implementation work — the field is already present on
-the runtime object via the `...ctx` spread in `registry.ts:fromPlugin()` (line
-67). This change only adds the field to the type definition, making the plugin
-API honest about what's available.
+**Estimated scope**: 1 line of implementation plus the type definition. The field
+currently leaks through the `...ctx` spread and `as unknown as PluginToolContext`
+cast in `registry.ts:fromPlugin()` (line 67-71), but relying on a cast for
+runtime behavior is fragile — if upstream ever renames or removes `messages` from
+the internal `Tool.Context`, the plugin breaks silently. The implementation must
+explicitly map `messages` onto `pluginCtx`, the same way `directory` and
+`worktree` are already explicit:
+
+```typescript
+const pluginCtx = {
+  ...ctx,
+  directory: Instance.directory,
+  worktree: Instance.worktree,
+  messages: ctx.messages,  // <-- explicit, not relying on spread
+  // ... updateMessage (from Change 3) ...
+} as unknown as PluginToolContext
+```
+
+This makes the runtime contract explicit. If the internal `Tool.Context` shape
+changes, the explicit mapping produces a compile-time error rather than a silent
+runtime break.
 
 **Files changed**:
 
 | File | Change |
 |------|--------|
 | `packages/plugin/src/tool.ts` | Add `messages` to `ToolContext` type |
+| `packages/opencode/src/tool/registry.ts` | Add explicit `messages: ctx.messages` to `pluginCtx` |
 
 ### Optional: Enrich Transform Hook Input
 
