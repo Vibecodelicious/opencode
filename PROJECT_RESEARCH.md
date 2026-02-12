@@ -518,7 +518,7 @@ proposal's Feature 4 for the workaround.
    z.record(z.unknown()).optional()` to the `MessageV2.Base` schema (see Section
    9, Change 1) solves this structurally. Since `metadata` is a known Zod field,
    it survives `Session.updateMessage()` which parses inputs through
-   `fn(MessageV2.Info, ...)` (`util/fn.ts:5`). Plugins namespace by package name
+   `fn(MessageV2.Info, ...)` (`util/fn.ts:5`). Plugins namespace by `ctx.pluginID`
    within `metadata` to avoid cross-plugin conflicts. No schema bypass or
    call-site auditing needed.
 
