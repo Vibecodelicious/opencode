@@ -5,9 +5,12 @@
 This proposal describes how to implement surgical context compaction ("Context
 Bonsai") as a standalone OpenCode plugin distributed as an npm package. The
 plugin gives the LLM the ability to selectively prune stale or problematic
-context while preserving summaries, and to retrieve the original content if
-needed later. The goal is to avoid catastrophic batch compaction by staying ahead
-of the context limit through continuous, targeted pruning.
+context while preserving summaries, and to retrieve the original content later
+within the same session. Pruned content remains retrievable until OpenCode's
+built-in overflow compaction fires, at which point the originals are
+destructively summarized and no longer recoverable. The goal is to avoid
+triggering that built-in compaction by staying ahead of the context limit through
+continuous, targeted pruning.
 
 **The plugin requires four small upstream changes to OpenCode**: a `metadata`
 bag on the message schema (for plugin data persistence), `messages` formalized
