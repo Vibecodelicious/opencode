@@ -59,16 +59,20 @@ to_id.]"
    array already available on the tool context — see "Upstream State" below)
 2. Calls `generateText()` using `ctx.languageModel` with a summarization prompt
    to produce a summary + index terms
-3. Writes archive metadata directly onto the messages via `ctx.updateMessage()`
-   (see "Archive Storage" below)
+3. Writes archive metadata onto the anchor message (the first in the range) via
+   a single `ctx.updateMessage()` call (see "Archive Storage" below)
 4. Clears the ID-visibility flag
 5. Returns a notification to the user describing what was pruned and the summary
 
 **Failure handling**: If the summarization LLM call fails (rate limit, network
 error, provider outage), the prune operation aborts entirely. No archive
-metadata is written. The tool returns an error message to the LLM. Since archive
-metadata is written atomically in a single step after summarization succeeds,
-there is no partial-write corruption risk.
+metadata is written. The tool returns an error message to the LLM.
+
+**Atomicity**: The entire prune operation writes to exactly one file — the anchor
+message — via a single `Storage.update()` call. Follower messages carry no
+metadata; the transform hook identifies them by position between the anchor and
+`rangeEnd`. This means a crash cannot leave partial state: either the anchor
+write completes (full prune) or it doesn't (no prune).
 
 **Input validation**: The tool must validate `from_id` and `to_id` before
 proceeding: both IDs must exist in `ctx.messages`, `from_id` must precede
@@ -89,10 +93,9 @@ and `updateMessage()` on ToolContext. See "Required Upstream Changes" below.
 ### Feature 2: Retrieve Tool
 
 The LLM calls this tool to restore previously pruned content. The plugin:
-1. Reads `ctx.messages` to find the anchor message and its followers by checking
-   archive metadata
-2. Clears the archive metadata on the anchor and all follower messages via
-   `ctx.updateMessage()`, restoring them to their un-pruned state
+1. Reads `ctx.messages` to find anchor messages with archive metadata
+2. Clears the archive metadata on the anchor via a single `ctx.updateMessage()`
+   call, restoring the entire range to its un-pruned state
 3. Returns a short status message (e.g., "Restored 5 messages from range
    msg_abc to msg_xyz. Original content is now visible.")
 
@@ -116,23 +119,27 @@ messages are visible to the LLM on the very next assistant turn — not delayed.
 **Upstream hook used**: `tool` (existing)
 
 **Upstream change required**: `updateMessage()` on ToolContext (same as Feature
-1). The retrieve tool uses `ctx.updateMessage()` to clear metadata on each
-message in the range.
+1). The retrieve tool uses a single `ctx.updateMessage()` call on the anchor to
+clear its metadata — followers carry no metadata, so no additional writes are
+needed.
 
 ### Feature 3: Archived Message Rendering + Message ID Prefixing
 
 This is the core mechanism that makes pruning effective. On every turn, before
 the conversation is sent to the LLM, the plugin intercepts the message list and:
 
-1. **Replaces archived messages with placeholders.** For each message that has
-   archive metadata on it, the plugin replaces its parts with a single text part:
+1. **Replaces anchor messages with placeholders.** For each message that has
+   archive metadata in `metadata["context-bonsai"].archive`, the plugin replaces
+   its parts with a single text part:
    ```
    [PRUNED: msg_abc to msg_xyz]
    Summary: <the generated summary>
    Index: <comma-separated index terms>
    ```
-2. **Removes follower messages.** Messages within an archived range (between
-   the anchor and range-end IDs) are removed from the array entirely.
+2. **Removes follower messages.** Using the anchor's `rangeEnd`, the plugin
+   identifies all messages between the anchor and the range-end ID by position
+   in the array and removes them entirely. Follower messages carry no metadata —
+   membership is determined solely by position relative to the anchor.
 3. **Prefixes message IDs** when the ID-visibility flag is set (phase 1 of the
    prune flow), so the LLM can reference messages by ID.
 
@@ -282,9 +289,8 @@ The plugin stores archive data in a `metadata` bag on the message schema — a
 general-purpose extension point for plugins. Each plugin namespaces its data by
 package name, preventing cross-plugin clobbering.
 
-**How it works**: When the prune tool archives a range, it calls
-`ctx.updateMessage(id, fn)` on the anchor message (the first message in the
-range) to write archive data into the plugin's namespace:
+**How it works**: When the prune tool archives a range, it makes a single
+`ctx.updateMessage()` call on the anchor message (the first in the range):
 
 ```typescript
 await ctx.updateMessage(fromId, (draft) => {
@@ -297,14 +303,12 @@ await ctx.updateMessage(fromId, (draft) => {
     },
   }
 })
-// Mark follower messages as archived-by
-for (const msg of rangeFollowers) {
-  await ctx.updateMessage(msg.info.id, (draft) => {
-    draft.metadata ??= {}
-    draft.metadata["context-bonsai"] = { archivedBy: fromId }
-  })
-}
 ```
+
+Follower messages (between anchor and `rangeEnd`) carry no metadata. The
+transform hook identifies them by position in the message array relative to
+the anchor. This makes the write truly atomic — one file, one
+`Storage.update()` call, no partial-state risk on crash.
 
 **Why metadata survives** (after Change 1 is applied): Once `metadata` is added
 to `MessageV2.Base` as `z.record(z.unknown()).optional()`, Zod preserves it
@@ -335,7 +339,6 @@ const ArchiveSchema = z.object({
     indexTerms: z.array(z.string()),
     rangeEnd: z.string(),
   }).optional(),
-  archivedBy: z.string().optional(),
 })
 // On read:
 const data = ArchiveSchema.parse(msg.info.metadata?.["context-bonsai"] ?? {})
@@ -347,11 +350,11 @@ plugin's data shape.
 **How it's used**:
 - The **prune tool** writes archive data via `ctx.updateMessage()` into
   `metadata["context-bonsai"]`
-- The **retrieve tool** reads archive data from `ctx.messages` using the
-  plugin-local schema, then clears it via `ctx.updateMessage()` to restore
-  the original messages
-- The **transform hook** checks each message for archive metadata to identify
-  which messages to replace with placeholders
+- The **retrieve tool** finds anchor messages via `ctx.messages`, then clears
+  their metadata via `ctx.updateMessage()` to restore the range
+- The **transform hook** finds anchor messages with archive metadata, replaces
+  them with placeholders, and removes followers by position between anchor
+  and `rangeEnd`
 
 ---
 
@@ -590,8 +593,8 @@ plugins to cache this data from other hooks.
 │    4. System-reminder wrapping                           │
 │    5. ── Plugin: messages.transform ──────────────────── │
 │    │     • Check messages for archive metadata            │
-│    │     • Replace archived msgs with placeholders       │
-│    │     • Remove range-follower messages                │
+│    │     • Replace anchor msgs with placeholders          │
+│    │     • Remove followers by position (anchor→rangeEnd)│
 │    │     • Prefix IDs if visibility flag set              │
 │    │     • Inject context gauge on last user msg          │
 │    6. toModelMessages()                                  │
@@ -602,7 +605,7 @@ plugins to cache this data from other hooks.
 │    │   • prune tool (two-phase)                          │
 │    │     - reads ctx.messages                            │
 │    │     - calls ctx.languageModel for summarization     │
-│    │     - writes archive metadata via ctx.updateMessage  │
+│    │     - writes anchor metadata via ctx.updateMessage    │
 │    │   • retrieve tool                                   │
 │    │     - reads ctx.messages (checks archive metadata)   │
 │    │     - clears metadata via ctx.updateMessage()        │
@@ -622,9 +625,9 @@ plugins to cache this data from other hooks.
 │    │   • Cache model.limit.context for gauge %           │
 └─────────────────────────────────────────────────────────┘
 
-Archive metadata lives in namespaced message metadata:
+Archive metadata lives on anchor messages only:
   msg.metadata["context-bonsai"] = { archive: { summary, indexTerms, rangeEnd } }
-  msg.metadata["context-bonsai"] = { archivedBy: <anchor message ID> }
+  Followers carry no metadata — identified by position between anchor and rangeEnd
 ```
 
 ---
