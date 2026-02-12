@@ -107,8 +107,10 @@ Everything else works with existing hooks.
    `plugin/src/tool.ts` + `tool/registry.ts`)
 3. **Add `languageModel: LanguageModelV2` to ToolContext** (~10 lines across 3
    files: `plugin/src/tool.ts`, `tool/tool.ts`, `session/prompt.ts`)
-4. **Add `updateMessage(id, fn)` to ToolContext** (~10 lines across 2 files:
+4. **Add `updateMessage(id, fn)` to ToolContext** (~15 lines across 2 files:
    `plugin/src/tool.ts`, `tool/registry.ts`)
+5. **Add `pluginID` to ToolContext** (~5 lines across 3 files:
+   `plugin/src/tool.ts`, `plugin/index.ts`, `tool/registry.ts`)
 
 **Nice-to-have**: Enrich `experimental.chat.messages.transform` input from `{}`
 to `{ sessionID, model }` for easier gauge computation.
