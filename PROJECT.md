@@ -109,10 +109,12 @@ Everything else works with existing hooks.
    files: `plugin/src/tool.ts`, `tool/tool.ts`, `session/prompt.ts`)
 4. **Add `updateMessage(id, fn)` to ToolContext** (~15 lines across 2 files:
    `plugin/src/tool.ts`, `tool/registry.ts`)
-5. **Add `pluginID` to ToolContext** (~5 lines across 3 files:
-   `plugin/src/tool.ts`, `plugin/index.ts`, `tool/registry.ts`)
-6. **Enrich transform hook input** (1 line at `prompt.ts:620` — add
-   `{ sessionID, model }` to eliminate fragile per-session side caches)
+5. **Add `pluginID` to ToolContext** (~15 lines across 3 files:
+   `plugin/src/tool.ts`, `plugin/index.ts`, `tool/registry.ts` — requires
+   changing loader return type to carry plugin provenance)
+6. **Enrich transform hook input** (2 lines across 2 files: `prompt.ts:620`
+   runtime + `plugin/src/index.ts:198` type — add `{ sessionID, model }` to
+   eliminate fragile per-session side caches)
 
 ### Metadata Persistence
 

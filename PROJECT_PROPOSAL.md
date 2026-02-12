@@ -26,7 +26,11 @@ without fragile side caches).
 
 When installed, the plugin:
 
-1. **Registers two tools** (prune and retrieve) that the LLM can call
+1. **Registers two tools** (`context-bonsai:prune` and `context-bonsai:retrieve`)
+   that the LLM can call. Tool names are prefixed with the plugin name to avoid
+   collisions — the runtime tool map (`prompt.ts:724`) is last-write-wins, so
+   unprefixed names like `prune` risk silent override by other plugins or
+   built-in tools
 2. **Injects context gauges** into the conversation so the LLM sees its own
    token utilization and is prompted to prune when pressure builds
 3. **Renders pruned messages as compact placeholders** in the conversation
@@ -635,8 +639,13 @@ enables future upstream tooling — e.g., a debug view that shows which plugin
 owns which metadata keys, or enforced namespacing that rejects writes outside a
 plugin's own key.
 
-**Estimated scope**: ~5 lines across 3 files (`plugin/src/tool.ts`,
-`plugin/index.ts`, `tool/registry.ts`).
+**Estimated scope**: ~15 lines across 3 files (`plugin/src/tool.ts`,
+`plugin/index.ts`, `tool/registry.ts`). The loader currently returns `Hooks[]`
+with no source identity (`Plugin.list()` at `plugin/index.ts:118`), and tool
+registration in `registry.ts:50` drops plugin provenance. Threading `pluginID`
+requires changing the loader to return `Array<{ name: string; hooks: Hooks }>`
+(or equivalent), propagating the name through tool registration, and setting it
+on `pluginCtx` in `fromPlugin()`.
 
 ### Change 6: Enrich Transform Hook Input
 
@@ -676,9 +685,12 @@ per-session caches for `sessionID` and `model.limit.context` populated from
 transformation face the same burden. The plugin's Feature 4 (Context Gauges)
 describes this workaround.
 
-**Estimated scope**: 1 line at `prompt.ts:620`. The `sessionID` and `model`
-variables are already in scope. Backward compatible — existing plugins that
-ignore the input are unaffected.
+**Estimated scope**: 2 lines across 2 files. The runtime change is 1 line at
+`prompt.ts:620` (the `sessionID` and `model` variables are already in scope).
+The type change is 1 line in `plugin/src/index.ts:198` — updating the hook's
+`input` type from `{}` to `{ sessionID: string; model: Model }` so plugin
+authors get a typed contract. Backward compatible — existing plugins that ignore
+the input are unaffected.
 
 ---
 
