@@ -380,7 +380,7 @@ Using only existing upstream hooks:
 | Inject system prompt guidance | YES | `experimental.chat.system.transform` |
 | Track token usage | YES | `event` hook (message.updated events) |
 | Get model context limit | YES | `chat.params` or `experimental.chat.system.transform` (cache it) |
-| Read session messages from tool | **NO** | ToolContext has no message access |
+| Read session messages from tool | **YES (undocumented leak)** | `messages` leaks through `...ctx` spread + cast in `registry.ts:67-71`; must be formalized (Change 4) |
 | Write archive metadata to messages | **NO** | ToolContext has no Storage/Session API |
 | Make LLM call for summarization | **NO** | ToolContext has no languageModel |
 | Inject context gauge | **PARTIAL** | Transform hook can add parts, but input lacks model info (must cache from other hooks) |
@@ -489,7 +489,8 @@ pluginID: string
 
 **Implementation**: `Plugin.list()` (`plugin/index.ts:118`) returns `Hooks[]`
 with no source identity. Changing its return type would break 5 existing call
-sites (`auth.ts`, `provider.ts`, auth CLI, `registry.ts`). Instead, add a new
+sites (`registry.ts:50`, `provider.ts:861`, `auth.ts:13`,
+`cli/cmd/auth.ts:310`, `cli/cmd/auth.ts:326`). Instead, add a new
 `Plugin.listDetailed()` API returning `Array<{ name: string; hooks: Hooks }>`.
 Only `registry.ts:50` (tool registration) switches to `listDetailed()`; all
 other call sites use `list()` unchanged. The name comes from the npm package
