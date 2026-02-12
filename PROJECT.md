@@ -100,7 +100,7 @@ No message read/write. No languageModel.
 
 Everything else works with existing hooks.
 
-### Minimum Upstream Changes Required
+### Required Upstream Changes (hard blockers)
 
 1. **Add `metadata` to `MessageV2.Base` schema** (1 line in `message-v2.ts`)
 2. **Add `languageModel: LanguageModelV2` to ToolContext** (~10 lines across 4
@@ -110,9 +110,12 @@ Everything else works with existing hooks.
    `plugin/src/tool.ts`, `tool/registry.ts`)
 4. **Formalize `messages` on ToolContext** (type + explicit runtime mapping,
    `plugin/src/tool.ts` + `tool/registry.ts`)
+
+### Recommended Upstream Changes (have workarounds)
+
 5. **Add `pluginID` to ToolContext** (~15 lines across 3 files:
-   `plugin/src/tool.ts`, `plugin/index.ts`, `tool/registry.ts` — requires
-   changing loader return type to carry plugin provenance)
+   `plugin/src/tool.ts`, `plugin/index.ts`, `tool/registry.ts` — adds new
+   `Plugin.listDetailed()` API; `Plugin.list()` unchanged)
 6. **Enrich transform hook input** (2 lines across 2 files: `prompt.ts:620`
    runtime + `plugin/src/index.ts:198` type — add `{ sessionID, model }` to
    eliminate fragile per-session side caches)
