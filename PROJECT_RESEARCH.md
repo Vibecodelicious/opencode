@@ -394,7 +394,7 @@ the water without ToolContext enhancements.
 
 ---
 
-## 9. Minimum Upstream Changes Required
+## 9. Upstream Changes Required
 
 ### Change 1: Add `metadata` to Message Schema
 
@@ -475,6 +475,10 @@ that currently leaks internal fields.
 
 **Scope**: Type definition + 1 line in `fromPlugin()`.
 
+### Recommended Changes (have workarounds)
+
+Changes 5 and 6 improve production quality but are not hard blockers.
+
 ### Change 5: Add `pluginID` to Plugin ToolContext
 
 Add to `packages/plugin/src/tool.ts` ToolContext:
@@ -483,12 +487,16 @@ Add to `packages/plugin/src/tool.ts` ToolContext:
 pluginID: string
 ```
 
-**Implementation**: `Plugin.list()` (`plugin/index.ts:118`) currently returns
-`Hooks[]` with no source identity. The loading pipeline must change to return
-`Array<{ name: string; hooks: Hooks }>` (or equivalent), associating each
-`Hooks` entry with its npm package name (`pkg` at `plugin/index.ts:60`) or
-filename namespace (`registry.ts:43`). This name is threaded to `fromPlugin()`
-and set explicitly on `pluginCtx`.
+**Implementation**: `Plugin.list()` (`plugin/index.ts:118`) returns `Hooks[]`
+with no source identity. Changing its return type would break 5 existing call
+sites (`auth.ts`, `provider.ts`, auth CLI, `registry.ts`). Instead, add a new
+`Plugin.listDetailed()` API returning `Array<{ name: string; hooks: Hooks }>`.
+Only `registry.ts:50` (tool registration) switches to `listDetailed()`; all
+other call sites use `list()` unchanged. The name comes from the npm package
+name (`pkg` at `plugin/index.ts:60`) or filename namespace (`registry.ts:43`).
+
+**Without this change**: The plugin hardcodes its metadata key (e.g.,
+`metadata["context-bonsai"]`). Functional but fragile if renamed.
 
 **Scope**: ~15 lines across 3 files (`plugin/src/tool.ts`, `plugin/index.ts`,
 `tool/registry.ts`).

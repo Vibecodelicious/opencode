@@ -12,13 +12,15 @@ destructively summarized and no longer recoverable. The goal is to avoid
 triggering that built-in compaction by staying ahead of the context limit through
 continuous, targeted pruning.
 
-**The plugin requires six small upstream changes to OpenCode**: a `metadata`
-bag on the message schema (for plugin data persistence), `messages` formalized
-on the plugin `ToolContext` (for reading the conversation), `languageModel` on
+**The plugin requires four small upstream changes to OpenCode**: a `metadata`
+bag on the message schema (for plugin data persistence), `languageModel` on
 `ToolContext` (for summarization), `updateMessage(id, fn)` on `ToolContext`
-(for writing metadata), `pluginID` on `ToolContext` (for consistent metadata
-namespacing), and enriched transform hook input (for session/model context
-without fragile side caches).
+(for writing metadata), and `messages` formalized on the plugin `ToolContext`
+(for reading the conversation). Two additional changes are **recommended** for
+production quality: `pluginID` on `ToolContext` (for consistent metadata
+namespacing) and enriched transform hook input (for session/model context
+without fragile side caches). Both recommended changes have workarounds
+described below.
 
 ---
 
@@ -117,6 +119,14 @@ replaced it with placeholders in the ephemeral clone sent to the LLM. After the
 retrieve tool clears the metadata, the transform hook on the next LLM turn sees
 clean messages and passes them through unmodified. The original content
 reappears naturally in the conversation.
+
+**Same-step guard**: If the LLM calls `context-bonsai:prune` and then
+`context-bonsai:retrieve` in the same response, the retrieve sees stale
+`ctx.messages` without the prune's metadata (see "Within-step staleness" in
+Operational Details). The retrieve tool must detect this and return an error:
+"This archive was created in the current step. Call retrieve on the next turn."
+The plugin tracks which anchors were pruned in the current step and checks
+against this set before proceeding.
 
 **Why the tool result is short**: All plugin tool output passes through
 `Truncate.output()` in `fromPlugin()` (`registry.ts:73`) — capped at 2000 lines
@@ -251,6 +261,14 @@ After a prune operation, the gauge will still show the pre-prune token count unt
 the next LLM response fires a new `message.updated` event. The LLM already sees
 the pruned message placeholders in its context, so it can infer that utilization
 has decreased even if the gauge hasn't updated yet.
+
+**Event dispatch timing**: Plugin event handlers are invoked without `await`
+(`plugin/index.ts:132`) — the bus fires them as fire-and-forget. If the plugin's
+event handler updates its token cache asynchronously, the cache update could race
+with the next transform hook invocation. In practice this is unlikely to cause
+visible issues (the transform hook fires on a later turn, well after the event
+handler completes), but the plugin should use synchronous mutation of its cache
+data structure to eliminate the race entirely.
 
 ### Feature 5: System Prompt Guidance
 
@@ -615,6 +633,14 @@ runtime break.
 | `packages/plugin/src/tool.ts` | Add `messages` to `ToolContext` type |
 | `packages/opencode/src/tool/registry.ts` | Add explicit `messages: ctx.messages` to `pluginCtx` |
 
+---
+
+## Recommended Upstream Changes
+
+Changes 5 and 6 improve production quality and developer ergonomics but are not
+hard blockers. The plugin functions without them, using the workarounds described
+in each section.
+
 ### Change 5: Add `pluginID` to Plugin ToolContext
 
 **What**: Expose the plugin's package name on the tool context so plugins can
@@ -630,11 +656,15 @@ export type ToolContext = {
 ```
 
 **Implementation**: `Plugin.list()` (`plugin/index.ts:118`) currently returns
-`Hooks[]` with no source identity. The loading pipeline must associate each
+`Hooks[]` with no source identity. Changing its return type would break 5
+existing call sites that expect `Hooks[]` (in `auth.ts`, `provider.ts`,
+`auth CLI`, and `registry.ts`). Instead, add a new `Plugin.listDetailed()`
+API that returns `Array<{ name: string; hooks: Hooks }>`, associating each
 `Hooks` entry with its source plugin name — the npm package name for installed
 plugins (`pkg` at `plugin/index.ts:60`), or the filename namespace for custom
-tools (`registry.ts:43`). This name is threaded to `fromPlugin()` and set
-explicitly on `pluginCtx`.
+tools (`registry.ts:43`). Only `registry.ts:50` (tool registration) switches to
+`listDetailed()`; all other call sites continue using `list()` unchanged. The
+name is threaded to `fromPlugin()` and set explicitly on `pluginCtx`.
 
 **Why this is general-purpose**: Any plugin that uses the `metadata` bag benefits
 from a framework-provided identity rather than hardcoded strings. It also
@@ -642,13 +672,15 @@ enables future upstream tooling — e.g., a debug view that shows which plugin
 owns which metadata keys, or enforced namespacing that rejects writes outside a
 plugin's own key.
 
+**Without this change**: The plugin hardcodes its own name (e.g.,
+`metadata["context-bonsai"]`) instead of using `ctx.pluginID`. This works but
+is fragile — if the package is renamed, all hardcoded strings must be updated
+manually.
+
 **Estimated scope**: ~15 lines across 3 files (`plugin/src/tool.ts`,
-`plugin/index.ts`, `tool/registry.ts`). The loader currently returns `Hooks[]`
-with no source identity (`Plugin.list()` at `plugin/index.ts:118`), and tool
-registration in `registry.ts:50` drops plugin provenance. Threading `pluginID`
-requires changing the loader to return `Array<{ name: string; hooks: Hooks }>`
-(or equivalent), propagating the name through tool registration, and setting it
-on `pluginCtx` in `fromPlugin()`.
+`plugin/index.ts`, `tool/registry.ts`). The new `listDetailed()` API wraps the
+existing loading pipeline with name tracking. `Plugin.list()` remains unchanged,
+avoiding regressions in auth/provider flows.
 
 ### Change 6: Enrich Transform Hook Input
 
@@ -790,9 +822,10 @@ placeholders. There is no race.
 calls in the same step share this snapshot. If
 the LLM makes multiple tool calls in one response (e.g., prune then immediately
 retrieve), the second tool call sees the stale `ctx.messages` without metadata
-changes from the first. This is acceptable for the prune/retrieve workflow — each
-operates independently and takes effect on the next step iteration when messages
-are reloaded from storage.
+changes from the first. The retrieve tool enforces this with a same-step guard (see Feature 2) — if the
+anchor was pruned in the current step, retrieve returns an error instructing the
+LLM to retry on the next turn. Prune operations take effect on the next step
+iteration when messages are reloaded from storage.
 
 **Reminder injection visibility**: `insertReminders()` (`prompt.ts:540`) modifies
 `msgs` *before* the clone at line 599. Since `ctx.messages` references `msgs`,
@@ -822,11 +855,11 @@ independent state with no cross-contamination.
    could corrupt the original data. The plugin should defensively copy any arrays
    it modifies.
 
-3. **Transform hook input enrichment dependency**: Change 6 enriches the
-   transform hook input from `{}` to `{ sessionID, model }`. If this change is
-   deferred, the plugin falls back to caching session/model info from other hooks
-   (see Change 6 "Without this change" section). This adds complexity and
-   fragility but is not a blocker.
+3. **Transform hook input enrichment dependency**: Change 6 (recommended, not
+   required) enriches the transform hook input from `{}` to `{ sessionID, model }`.
+   Without it, the plugin caches session/model info from other hooks (see
+   Change 6 "Without this change" section). This adds complexity and fragility
+   but the plugin functions correctly with the workaround.
 
 4. **Plugin state reliability**: The plugin holds ephemeral state in module-level
    variables (token counts, model limits, ID-visibility flags per session).
