@@ -147,13 +147,13 @@ the conversation is sent to the LLM, the plugin intercepts the message list and:
 3. **Prefixes message IDs** when the ID-visibility flag is set (phase 1 of the
    prune flow), so the LLM can reference messages by ID.
 
-**Follower identification edge cases**: Messages are ordered by ULID-based IDs
-(`Identifier.ascending()`), so chronological order is guaranteed under normal
-operation. Two edge cases to handle:
+**Follower identification edge cases**: Messages are ordered by monotonically
+increasing IDs (`Identifier.ascending()` uses a hex-encoded timestamp prefix),
+so chronological order is guaranteed under normal operation. Two edge cases to
+handle:
 - **`rangeEnd` missing** (e.g., message deleted via session revert, or filtered
-  out by `filterCompacted()`): The plugin treats the anchor as a degenerate
-  single-message archive — replace the anchor with a placeholder, but remove no
-  followers. This is a safe fallback: no content is hidden beyond the anchor
+  out by `filterCompacted()`): The plugin treats the anchor as a single-message
+  archive — replace the anchor with a placeholder, but remove no followers. This is a safe fallback: no content is hidden beyond the anchor
   itself, and the summary is still useful context.
 - **Multiple pruned ranges**: The transform hook must process all anchors in a
   single pass. It should collect the set of message indices to remove first, then
