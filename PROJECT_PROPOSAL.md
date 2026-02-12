@@ -520,6 +520,9 @@ const pluginCtx = {
         throw new Error("plugin mutated identity fields")
       MessageV2.Info.parse(draft) // required-field type check before write
     })
+    // Note: this event may reach the plugin's own `event` hook handler.
+    // The plugin must guard against re-entrant processing (e.g., ignore
+    // events for messages it just wrote).
     Bus.publish(MessageV2.Event.Updated, { info: updated })
   },
 } as unknown as PluginToolContext
