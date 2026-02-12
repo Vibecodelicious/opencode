@@ -28,8 +28,11 @@ The proposal must:
 5. **Notify mode (always on)** — the plugin operates automatically; the user is
    informed of what was pruned. No configuration knobs.
 6. **Accurate utilization reporting** — whatever context gauge is shown must
-   reflect actual token usage. OpenCode already has internal usage calculations;
-   the plugin should leverage them rather than reinvent.
+   reflect actual token usage, though it necessarily lags one turn behind (token
+   counts come from the previous assistant message's events). A future upstream
+   change could expose current-turn token counts, but the plugin does not depend
+   on it. OpenCode already has internal usage calculations; the plugin should
+   leverage them rather than reinvent.
 
 ## Scope: What is EXPLICITLY OUT OF SCOPE
 
@@ -100,8 +103,8 @@ Everything else works with existing hooks.
 ### Minimum Upstream Changes Required
 
 1. **Add `metadata` to `MessageV2.Base` schema** (1 line in `message-v2.ts`)
-2. **Formalize `messages` on ToolContext** (type-only, 1 line in
-   `plugin/src/tool.ts` — already works at runtime)
+2. **Formalize `messages` on ToolContext** (type + explicit runtime mapping,
+   `plugin/src/tool.ts` + `tool/registry.ts`)
 3. **Add `languageModel: LanguageModelV2` to ToolContext** (~10 lines across 3
    files: `plugin/src/tool.ts`, `tool/tool.ts`, `session/prompt.ts`)
 4. **Add `updateMessage(id, fn)` to ToolContext** (~10 lines across 2 files:

@@ -237,11 +237,14 @@ prompt guidance is a fixed ~200 tokens. These are small relative to a typical
 injected tokens to avoid slightly over-reporting available space.
 
 **Gauge staleness**: Token counts come from `message.updated` events on the
-*previous* turn's assistant message. The gauge is always one turn behind. After a
-prune operation, the gauge will still show the pre-prune token count until the
-next LLM response fires a new `message.updated` event. This is acceptable — the
-LLM already sees the pruned message placeholders in its context, so it can infer
-that utilization has decreased even if the gauge hasn't updated yet.
+*previous* turn's assistant message. The gauge is always one turn behind — this
+is a known limitation of the event-driven approach, not a bug. There is currently
+no hook that provides the current turn's token count before the LLM responds; a
+future upstream change could expose this, but the plugin does not depend on it.
+After a prune operation, the gauge will still show the pre-prune token count until
+the next LLM response fires a new `message.updated` event. The LLM already sees
+the pruned message placeholders in its context, so it can infer that utilization
+has decreased even if the gauge hasn't updated yet.
 
 ### Feature 5: System Prompt Guidance
 
@@ -294,9 +297,9 @@ fields — including `messages` — are present on the object at runtime, even
 though they're not in the plugin `ToolContext` type definition. Plugin tools can
 already access `(ctx as any).messages` today.
 
-**Implication**: The plugin can read the full conversation without any upstream
-change. Formalizing `messages` on the plugin `ToolContext` type is a type-only
-change with zero implementation work.
+**Implication**: The plugin can read the full conversation today via the leak.
+Formalizing `messages` on the plugin `ToolContext` requires both a type definition
+and an explicit runtime mapping in `fromPlugin()` — see Change 4 below.
 
 ---
 
@@ -754,17 +757,18 @@ independent state with no cross-contamination.
 
 5. **Interaction with built-in compaction**: If the plugin doesn't prune
    aggressively enough, OpenCode's built-in overflow compaction
-   (`compaction.ts:isOverflow`) will still trigger. This is desirable — the
-   built-in compaction acts as a safety net, not a conflict. The plugin's pruning
-   reduces token counts, so the built-in threshold is less likely to fire.
-   However, if built-in compaction fires and summarizes a range that includes
-   plugin-pruned messages, the compaction LLM sees the **original** message
-   content (not the plugin's placeholders), because compaction reads from the
-   original `msgs` array (`prompt.ts:510-516`) rather than the transform hook's
-   ephemeral clone. This means compaction may redundantly summarize content the
-   plugin already summarized. This is acceptable — redundant summarization is
-   harmless, and the plugin's archive metadata on the messages remains valid
-   regardless.
+   (`compaction.ts:isOverflow`) will still trigger. This is expected and
+   desirable — built-in compaction is the hard safety net, and the plugin's
+   pruning reduces token counts so the built-in threshold is less likely to fire.
+   When built-in compaction does fire, it destructively summarizes messages and
+   the original content is **no longer retrievable** — this matches user
+   expectations for built-in compaction and is not something the plugin should
+   try to prevent or work around. If the compacted range includes plugin-pruned
+   messages, the compaction LLM sees the **original** message content (not the
+   plugin's placeholders), because compaction reads from the original `msgs`
+   array (`prompt.ts:510-516`) rather than the transform hook's ephemeral clone.
+   This means compaction may redundantly summarize content the plugin already
+   summarized, which is harmless.
 
 6. **Unsafe cast in `fromPlugin()`**: Plugin tools already receive internal
    fields (including `messages`, `callID`, `extra`) through the
