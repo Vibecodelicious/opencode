@@ -9,12 +9,11 @@ context while preserving summaries, and to retrieve the original content if
 needed later. The goal is to avoid catastrophic batch compaction by staying ahead
 of the context limit through continuous, targeted pruning.
 
-**The plugin requires three small upstream changes to OpenCode**: a `metadata`
-bag on the message schema (for plugin data persistence), `languageModel` on the
-plugin `ToolContext` (for summarization), and `updateMessage(id, fn)` on the
-plugin `ToolContext` (for writing metadata). All other functionality maps onto
-existing upstream plugin hooks, including message read access that already leaks
-through to plugins via the internal context.
+**The plugin requires four small upstream changes to OpenCode**: a `metadata`
+bag on the message schema (for plugin data persistence), `messages` formalized
+on the plugin `ToolContext` (for reading the conversation), `languageModel` on
+`ToolContext` (for summarization), and `updateMessage(id, fn)` on `ToolContext`
+(for writing metadata).
 
 ---
 
@@ -310,11 +309,31 @@ trust boundary is established at the plugin installation level. This follows the
 same convention as npm `package.json` keys, Kubernetes annotations, and HTTP
 headers.
 
+**Plugin-local schema validation**: The upstream `metadata` bag is untyped
+(`z.record(z.unknown())`). The plugin defines its own strict Zod schema for its
+namespace and validates on read:
+
+```typescript
+const ArchiveSchema = z.object({
+  archive: z.object({
+    summary: z.string(),
+    indexTerms: z.array(z.string()),
+    rangeEnd: z.string(),
+  }).optional(),
+  archivedBy: z.string().optional(),
+})
+// On read:
+const data = ArchiveSchema.parse(msg.info.metadata?.["context-bonsai"] ?? {})
+```
+
+This gives the plugin type safety without requiring upstream to know about the
+plugin's data shape.
+
 **How it's used**:
 - The **prune tool** writes archive data via `ctx.updateMessage()` into
   `metadata["context-bonsai"]`
-- The **retrieve tool** reads archive data from `ctx.messages` by checking
-  `msg.info.metadata?.["context-bonsai"]`
+- The **retrieve tool** reads and validates archive data from `ctx.messages`
+  using the plugin-local schema
 - The **transform hook** checks each message for archive metadata to identify
   which messages to replace with placeholders
 
@@ -460,15 +479,24 @@ writes if multiple operations target the same message.
 
 **Estimated scope**: ~10 lines across 2 files.
 
-**Safety guard**: The implementation should throw if the callback attempts to
-change identity fields (`id`, `sessionID`, `role`), preventing plugin bugs from
-corrupting message data.
+**Safety guards**: The implementation must enforce identity-field immutability.
+After the callback runs, the implementation checks that `id`, `sessionID`, and
+`role` are unchanged from their pre-callback values and throws if any differ.
+This prevents plugin bugs from corrupting message identity or moving messages
+between sessions. The guard is implemented in `fromPlugin()` by capturing the
+identity fields before calling `fn(draft)` and comparing after.
 
-### Optional: Formalize `messages` on Plugin ToolContext
+### Change 4: Formalize `messages` on Plugin ToolContext
 
 As described in "Upstream State" above, plugin tools already receive the
-`messages` array at runtime through the unsafe cast in `fromPlugin()`. Making
-this official is a type-only change:
+`messages` array at runtime through the unsafe cast in `fromPlugin()`. The
+plugin's entire read path depends on this — both the prune and retrieve tools
+read from `ctx.messages`, and the transform hook checks messages for archive
+metadata. Relying on an undocumented leak for a core capability is fragile; if
+upstream ever changes the internal `Tool.Context` shape, the plugin breaks
+silently.
+
+**Type definition** (in `packages/plugin/src/tool.ts`):
 
 ```typescript
 export type ToolContext = {
@@ -477,9 +505,16 @@ export type ToolContext = {
 }
 ```
 
-This is zero implementation work — the field is already present on the runtime
-object. It would make the plugin API honest about what's available and reduce the
-need for `(ctx as any).messages` hacks.
+**Estimated scope**: Zero implementation work — the field is already present on
+the runtime object via the `...ctx` spread in `registry.ts:fromPlugin()` (line
+67). This change only adds the field to the type definition, making the plugin
+API honest about what's available.
+
+**Files changed**:
+
+| File | Change |
+|------|--------|
+| `packages/plugin/src/tool.ts` | Add `messages` to `ToolContext` type |
 
 ### Optional: Enrich Transform Hook Input
 
