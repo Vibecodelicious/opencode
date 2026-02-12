@@ -475,10 +475,6 @@ that currently leaks internal fields.
 
 **Scope**: Type definition + 1 line in `fromPlugin()`.
 
-### Recommended Changes (have workarounds)
-
-Changes 5 and 6 improve production quality but are not hard blockers.
-
 ### Change 5: Add `pluginID` to Plugin ToolContext
 
 Add to `packages/plugin/src/tool.ts` ToolContext:
@@ -501,6 +497,8 @@ name (`pkg` at `plugin/index.ts:60`) or filename namespace (`registry.ts:43`).
 
 **Scope**: ~15 lines across 3 files (`plugin/src/tool.ts`, `plugin/index.ts`,
 `tool/registry.ts`).
+
+### Recommended Change (has workaround)
 
 ### Change 6: Enrich `experimental.chat.messages.transform` Input
 
