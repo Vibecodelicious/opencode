@@ -182,7 +182,7 @@ The upstream Part union includes `CompactionPart` but NOT `ContextGaugePart`.
 message schema (see Section 9, Change 1). Adding `metadata:
 z.record(z.unknown()).optional()` to `MessageV2.Base` gives plugins a blessed
 extension point that survives Zod parsing and all existing code paths. Plugins
-namespace by package name (e.g., `metadata["context-bonsai"]`).
+namespace by `ctx.pluginID` (e.g., `metadata[ctx.pluginID]`).
 
 ---
 
@@ -237,7 +237,7 @@ This uses `Storage.write()` — it completely overwrites the message.
 `MessageV2.Base` schema (see Section 9, Change 1) solves this structurally.
 Since `metadata` is a known Zod field, it survives `Session.updateMessage()`'s
 `fn()` wrapper which parses inputs through `MessageV2.Info.parse()`. Plugin
-data stored in `msg.metadata["plugin-name"]` is preserved through all existing
+data stored in `msg.metadata[ctx.pluginID]` is preserved through all existing
 code paths. The plugin uses `ctx.updateMessage()` (which delegates to
 `Storage.update()` for atomic read-modify-write) to write metadata.
 
@@ -375,7 +375,7 @@ Using only existing upstream hooks:
 
 | Plugin Feature | Feasible? | How |
 |---------------|-----------|-----|
-| Register prune/retrieve tools | YES | `tool` hook |
+| Register `context-bonsai:prune` / `context-bonsai:retrieve` tools | YES | `tool` hook |
 | Modify messages before LLM | YES | `experimental.chat.messages.transform` |
 | Inject system prompt guidance | YES | `experimental.chat.system.transform` |
 | Track token usage | YES | `event` hook (message.updated events) |
@@ -409,7 +409,7 @@ const Base = z.object({
 ```
 
 This is a general-purpose extension point for plugins. Each plugin namespaces
-its data by package name (e.g., `metadata["context-bonsai"]`). Since `metadata`
+its data by `ctx.pluginID` (e.g., `metadata[ctx.pluginID]`). Since `metadata`
 is a known Zod field, it survives `Session.updateMessage()` which parses inputs
 through `fn(MessageV2.Info, ...)` (`util/fn.ts:5`). No schema bypass needed.
 
@@ -426,13 +426,15 @@ languageModel: LanguageModelV2
 **Implementation site**: `packages/opencode/src/session/prompt.ts`,
 `resolveTools()` function (line ~680), inside the `context()` helper. Delegates
 to `Provider.getLanguage(model)` (already resolved in `resolveTools` scope).
-Passes to plugins automatically via the `...ctx` spread in
-`registry.ts:fromPlugin()` (line 67).
+Must be explicitly mapped in `registry.ts:fromPlugin()` (line 67) as
+`languageModel: ctx.languageModel` — not leaked through the unsafe `...ctx`
+spread + cast.
 
 **Note on `messages`**: Plugin tools already receive the `messages` array at
 runtime through the `...ctx` spread and `as unknown as PluginToolContext` cast
-in `registry.ts:67-71`. Formalizing this on the ToolContext type is a type-only
-change with zero implementation work.
+in `registry.ts:67-71`. This must be formalized with both a type definition on
+`ToolContext` AND explicit runtime mapping (`messages: ctx.messages`) in
+`fromPlugin()` to avoid depending on an undocumented leak.
 
 ### Change 3: Add `updateMessage()` to Plugin ToolContext
 
@@ -458,17 +460,55 @@ semantics, avoiding stale writes if multiple operations target the same message.
 - Plugins already have shell access (`$`) which is more dangerous
 - Identity-field guard can prevent corruption (throw if id/sessionID/role change)
 
-### Change 4: Enrich `experimental.chat.messages.transform` Input (nice-to-have)
+### Change 4: Formalize `messages` on Plugin ToolContext
+
+Add to `packages/plugin/src/tool.ts` ToolContext:
+
+```typescript
+messages: Array<{ info: Message; parts: Part[] }>
+```
+
+**Implementation site**: `packages/opencode/src/tool/registry.ts`,
+`fromPlugin()` function (line 60). Requires explicit runtime mapping
+(`messages: ctx.messages`) — must not rely on the unsafe `...ctx` spread + cast
+that currently leaks internal fields.
+
+**Scope**: Type definition + 1 line in `fromPlugin()`.
+
+### Change 5: Add `pluginID` to Plugin ToolContext
+
+Add to `packages/plugin/src/tool.ts` ToolContext:
+
+```typescript
+pluginID: string
+```
+
+**Implementation**: `Plugin.list()` (`plugin/index.ts:118`) currently returns
+`Hooks[]` with no source identity. The loading pipeline must change to return
+`Array<{ name: string; hooks: Hooks }>` (or equivalent), associating each
+`Hooks` entry with its npm package name (`pkg` at `plugin/index.ts:60`) or
+filename namespace (`registry.ts:43`). This name is threaded to `fromPlugin()`
+and set explicitly on `pluginCtx`.
+
+**Scope**: ~15 lines across 3 files (`plugin/src/tool.ts`, `plugin/index.ts`,
+`tool/registry.ts`).
+
+### Change 6: Enrich `experimental.chat.messages.transform` Input
 
 Current: `input: {}`
 Proposed: `input: { sessionID: string; model: Model }`
 
-This would give the transform hook the session context and model info needed for
-gauge computation without requiring the plugin to cache it from other hooks.
+This gives the transform hook the session context and model info needed for
+gauge computation without requiring the plugin to maintain fragile side caches
+populated from other hooks.
 
-**This is NOT strictly required** — the plugin can work around it by caching
-model info from `chat.params` or `experimental.chat.system.transform`. But it
-makes the plugin simpler and less fragile.
+**Without this change**: The plugin still works, but must cache `sessionID` and
+`model.limit.context` from `chat.params` and correlate by session. See the
+proposal's Feature 4 for the workaround.
+
+**Scope**: 2 lines across 2 files — 1 line at `prompt.ts:620` (runtime) +
+1 line in `plugin/src/index.ts:198` (type: `input: {}` →
+`input: { sessionID: string; model: Model }`).
 
 ---
 
