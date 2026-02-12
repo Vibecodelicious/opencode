@@ -14,11 +14,11 @@ The proposal must:
 
 ## Scope: What the Plugin MUST Implement
 
-1. **Prune tool** (renamed from "compact") — two-phase archiving: toggle
-   message ID visibility, then archive a message range with an LLM-generated
-   summary + index terms
-2. **Retrieve tool** — restore previously pruned/archived content back into the
-   conversation
+1. **Prune tool** (`context-bonsai:prune`, renamed from "compact") — two-phase
+   archiving: toggle message ID visibility, then archive a message range with an
+   LLM-generated summary + index terms
+2. **Retrieve tool** (`context-bonsai:retrieve`) — restore previously
+   pruned/archived content back into the conversation
 3. **Context gauges** — periodic token utilization checkpoints injected into the
    conversation as `<system-reminder>` tags (using OpenCode's existing system
    reminder pattern)
@@ -103,12 +103,13 @@ Everything else works with existing hooks.
 ### Minimum Upstream Changes Required
 
 1. **Add `metadata` to `MessageV2.Base` schema** (1 line in `message-v2.ts`)
-2. **Formalize `messages` on ToolContext** (type + explicit runtime mapping,
-   `plugin/src/tool.ts` + `tool/registry.ts`)
-3. **Add `languageModel: LanguageModelV2` to ToolContext** (~10 lines across 3
-   files: `plugin/src/tool.ts`, `tool/tool.ts`, `session/prompt.ts`)
-4. **Add `updateMessage(id, fn)` to ToolContext** (~15 lines across 2 files:
+2. **Add `languageModel: LanguageModelV2` to ToolContext** (~10 lines across 4
+   files: `plugin/src/tool.ts`, `tool/tool.ts`, `session/prompt.ts`,
+   `tool/registry.ts`)
+3. **Add `updateMessage(id, fn)` to ToolContext** (~15 lines across 2 files:
    `plugin/src/tool.ts`, `tool/registry.ts`)
+4. **Formalize `messages` on ToolContext** (type + explicit runtime mapping,
+   `plugin/src/tool.ts` + `tool/registry.ts`)
 5. **Add `pluginID` to ToolContext** (~15 lines across 3 files:
    `plugin/src/tool.ts`, `plugin/index.ts`, `tool/registry.ts` — requires
    changing loader return type to carry plugin provenance)
