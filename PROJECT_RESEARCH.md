@@ -178,11 +178,11 @@ const Base = z.object({
 
 The upstream Part union includes `CompactionPart` but NOT `ContextGaugePart`.
 
-**Implication**: The plugin cannot rely on schema-level archive fields on
-upstream. It stores archive metadata as custom fields on the message JSON via
-`Storage.update()` (atomic read-modify-write), which preserves them through
-storage round-trips. See Section 9 and Section 10 question 1 for the clobber
-risk audit.
+**Implication**: The plugin stores archive metadata in a `metadata` bag on the
+message schema (see Section 9, Change 1). Adding `metadata:
+z.record(z.unknown()).optional()` to `MessageV2.Base` gives plugins a blessed
+extension point that survives Zod parsing and all existing code paths. Plugins
+namespace by package name (e.g., `metadata["context-bonsai"]`).
 
 ---
 
@@ -231,16 +231,15 @@ export const updateMessage = fn(MessageV2.Info, async (msg) => {
 })
 ```
 
-This uses `Storage.write()` — it completely overwrites the message. If a plugin
-added custom fields via `Storage.update()`, a subsequent `Session.updateMessage()`
-call by OpenCode core would **erase them**. This is a significant concern for
-metadata persistence.
+This uses `Storage.write()` — it completely overwrites the message.
 
-**Resolution**: Expose `Storage.update()` to plugins via `ctx.updateMessage(id,
-fn)` on the plugin ToolContext (see Section 9, Change 2). An audit of all
-`Session.updateMessage()` call sites confirms that core code never touches old
-finalized messages (see Section 10, question 1), so the clobber risk is
-theoretical — but `Storage.update()` provides defense-in-depth.
+**Resolution**: Adding `metadata: z.record(z.unknown()).optional()` to the
+`MessageV2.Base` schema (see Section 9, Change 1) solves this structurally.
+Since `metadata` is a known Zod field, it survives `Session.updateMessage()`'s
+`fn()` wrapper which parses inputs through `MessageV2.Info.parse()`. Plugin
+data stored in `msg.metadata["plugin-name"]` is preserved through all existing
+code paths. The plugin uses `ctx.updateMessage()` (which delegates to
+`Storage.update()` for atomic read-modify-write) to write metadata.
 
 ---
 
@@ -397,7 +396,26 @@ the water without ToolContext enhancements.
 
 ## 9. Minimum Upstream Changes Required
 
-### Change 1: Add `languageModel` to Plugin ToolContext
+### Change 1: Add `metadata` to Message Schema
+
+Add to `MessageV2.Base` in `packages/opencode/src/session/message-v2.ts`:
+
+```typescript
+const Base = z.object({
+  id: z.string(),
+  sessionID: z.string(),
+  metadata: z.record(z.unknown()).optional(),  // <-- new
+})
+```
+
+This is a general-purpose extension point for plugins. Each plugin namespaces
+its data by package name (e.g., `metadata["context-bonsai"]`). Since `metadata`
+is a known Zod field, it survives `Session.updateMessage()` which parses inputs
+through `fn(MessageV2.Info, ...)` (`util/fn.ts:5`). No schema bypass needed.
+
+**Scope**: 1 line.
+
+### Change 2: Add `languageModel` to Plugin ToolContext
 
 Add to `packages/plugin/src/tool.ts` ToolContext:
 
@@ -416,7 +434,7 @@ runtime through the `...ctx` spread and `as unknown as PluginToolContext` cast
 in `registry.ts:67-71`. Formalizing this on the ToolContext type is a type-only
 change with zero implementation work.
 
-### Change 2: Add `updateMessage()` to Plugin ToolContext
+### Change 3: Add `updateMessage()` to Plugin ToolContext
 
 Add to `packages/plugin/src/tool.ts` ToolContext:
 
@@ -432,24 +450,15 @@ directly in `fromPlugin()`, delegating to:
 - `Storage.update(["message", ctx.sessionID, id], fn)` — atomic read-modify-write
 - `Bus.publish(MessageV2.Event.Updated, ...)` — notify subscribers
 
-**Why `Storage.update()` not `Session.updateMessage()`**: `Session.updateMessage`
-(`session/index.ts:378`) uses `Storage.write()` (blind overwrite).
-`Storage.update()` (`storage/storage.ts:179`) does atomic read-modify-write,
-preserving fields the callback didn't touch.
-
-**Clobber risk audit**: An audit of every `Session.updateMessage()` call site
-(`prompt.ts`, `processor.ts`, `compaction.ts`, `summary.ts`, `plan.ts`,
-`cli/cmd/debug/agent.ts`) confirms
-that **none of them update old, finalized messages**. Every call either creates
-new messages or updates the current in-progress message. Messages eligible for
-plugin annotation are always old and finalized, so core code will not overwrite
-the plugin's fields. Using `Storage.update()` is defense-in-depth.
+`Storage.update()` (`storage/storage.ts:179`) is preferred over
+`Session.updateMessage()` (`session/index.ts:378`) for atomic read-modify-write
+semantics, avoiding stale writes if multiple operations target the same message.
 
 **Risk**: This exposes write access to messages. Mitigated by:
 - Plugins already have shell access (`$`) which is more dangerous
 - Identity-field guard can prevent corruption (throw if id/sessionID/role change)
 
-### Change 3: Enrich `experimental.chat.messages.transform` Input (nice-to-have)
+### Change 4: Enrich `experimental.chat.messages.transform` Input (nice-to-have)
 
 Current: `input: {}`
 Proposed: `input: { sessionID: string; model: Model }`
@@ -465,15 +474,13 @@ makes the plugin simpler and less fragile.
 
 ## 10. Open Questions
 
-1. **Metadata persistence**: ~~RESOLVED.~~ Audited every `Session.updateMessage()`
-   call site (`prompt.ts`, `processor.ts`, `compaction.ts`, `summary.ts`,
-   `plan.ts`, `cli/cmd/debug/agent.ts`). None of them update old, finalized
-   messages — every call either creates new messages or updates the current
-   in-progress message. Plugin-added fields on old messages are safe from
-   clobber. Note: `Session.updateMessage()` has TWO clobber mechanisms — Zod
-   stripping (the `fn()` wrapper at `util/fn.ts:5` calls
-   `MessageV2.Info.parse()` which strips unknown keys) and blind
-   `Storage.write()` — but neither fires on old finalized messages.
+1. **Metadata persistence**: ~~RESOLVED.~~ Adding `metadata:
+   z.record(z.unknown()).optional()` to the `MessageV2.Base` schema (see Section
+   9, Change 1) solves this structurally. Since `metadata` is a known Zod field,
+   it survives `Session.updateMessage()` which parses inputs through
+   `fn(MessageV2.Info, ...)` (`util/fn.ts:5`). Plugins namespace by package name
+   within `metadata` to avoid cross-plugin conflicts. No schema bypass or
+   call-site auditing needed.
 
 2. **The `experimental` prefix**: Both transform hooks are marked
    `experimental`. Could they be removed or changed in a future upstream

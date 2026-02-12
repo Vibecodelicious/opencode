@@ -82,7 +82,9 @@ No message read/write. No languageModel.
 
 ### Hard Blockers
 
-**Plugin ToolContext lacks `languageModel` and `updateMessage()` access.**
+- **Plugin data persistence**: The message schema has no extension point for
+  plugin data. Requires adding `metadata: z.record(z.unknown()).optional()` to
+  `MessageV2.Base` (1 line). Plugins namespace by package name within this bag.
 - **Message read**: Already works — `messages` leaks through the `...ctx` spread
   and `as unknown as PluginToolContext` cast in `registry.ts:fromPlugin()` (line
   67). Formalizing this on the type is optional (zero implementation work).
@@ -95,25 +97,22 @@ Everything else works with existing hooks.
 
 ### Minimum Upstream Changes Required
 
-1. **Add `languageModel: LanguageModelV2` to ToolContext** (~10 lines across 3
+1. **Add `metadata` to `MessageV2.Base` schema** (1 line in `message-v2.ts`)
+2. **Add `languageModel: LanguageModelV2` to ToolContext** (~10 lines across 3
    files: `plugin/src/tool.ts`, `tool/tool.ts`, `session/prompt.ts`)
-2. **Add `updateMessage(id, fn)` to ToolContext** (~10 lines across 2 files:
+3. **Add `updateMessage(id, fn)` to ToolContext** (~10 lines across 2 files:
    `plugin/src/tool.ts`, `tool/registry.ts`)
 
 **Nice-to-have**: Enrich `experimental.chat.messages.transform` input from `{}`
 to `{ sessionID, model }` for easier gauge computation.
 
-### Metadata Persistence (RESOLVED)
+### Metadata Persistence
 
-`Session.updateMessage()` would destroy plugin fields through Zod stripping
-(`fn()` wrapper calls `MessageV2.Info.parse()` which strips unknown keys) and
-blind `Storage.write()`. An audit of **every** `Session.updateMessage()` call
-site (`prompt.ts`, `processor.ts`, `compaction.ts`, `summary.ts`, `plan.ts`,
-`cli/cmd/debug/agent.ts`) confirms that none of them update old, finalized
-messages — every call either creates new messages or updates the current
-in-progress message. Plugin-added fields on old messages (via
-`Storage.update()`, which bypasses both layers) are safe from clobber. Direct
-message annotation is used instead of sidecar storage.
+Solved by adding `metadata` to the message schema. Since it's a known Zod
+field, it survives `Session.updateMessage()` which parses inputs through
+`fn(MessageV2.Info, ...)` (`util/fn.ts:5`). No schema bypass needed. Plugin
+data is stored in `msg.metadata["context-bonsai"]`, namespaced to avoid
+cross-plugin conflicts.
 
 ## Status / Next Steps
 
