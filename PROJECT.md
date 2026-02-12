@@ -85,9 +85,11 @@ No message read/write. No languageModel.
 - **Plugin data persistence**: The message schema has no extension point for
   plugin data. Requires adding `metadata: z.record(z.unknown()).optional()` to
   `MessageV2.Base` (1 line). Plugins namespace by package name within this bag.
-- **Message read**: Already works — `messages` leaks through the `...ctx` spread
-  and `as unknown as PluginToolContext` cast in `registry.ts:fromPlugin()` (line
-  67). Formalizing this on the type is optional (zero implementation work).
+- **Message read**: Already works at runtime — `messages` leaks through the
+  `...ctx` spread and `as unknown as PluginToolContext` cast in
+  `registry.ts:fromPlugin()` (line 67). Must be formalized on the ToolContext
+  type to avoid depending on an undocumented leak (zero implementation work,
+  type-only change).
 - **Message write**: Requires adding `updateMessage(id, fn)` to ToolContext,
   delegating to `Storage.update()` (atomic read-modify-write).
 - **LLM for summarization**: Requires adding `languageModel` to ToolContext,
@@ -98,9 +100,11 @@ Everything else works with existing hooks.
 ### Minimum Upstream Changes Required
 
 1. **Add `metadata` to `MessageV2.Base` schema** (1 line in `message-v2.ts`)
-2. **Add `languageModel: LanguageModelV2` to ToolContext** (~10 lines across 3
+2. **Formalize `messages` on ToolContext** (type-only, 1 line in
+   `plugin/src/tool.ts` — already works at runtime)
+3. **Add `languageModel: LanguageModelV2` to ToolContext** (~10 lines across 3
    files: `plugin/src/tool.ts`, `tool/tool.ts`, `session/prompt.ts`)
-3. **Add `updateMessage(id, fn)` to ToolContext** (~10 lines across 2 files:
+4. **Add `updateMessage(id, fn)` to ToolContext** (~10 lines across 2 files:
    `plugin/src/tool.ts`, `tool/registry.ts`)
 
 **Nice-to-have**: Enrich `experimental.chat.messages.transform` input from `{}`
