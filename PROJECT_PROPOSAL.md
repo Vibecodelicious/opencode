@@ -213,10 +213,9 @@ message/session from the original message being replaced.
 The plugin injects token utilization information into the conversation so the
 LLM can see context pressure and decide when to prune.
 
-**Cadence**: The gauge is injected once every N turns (e.g., every 3 turns), or
-whenever the cached token utilization exceeds a threshold (e.g., 50% of context
-limit). The exact cadence is a tuning parameter internal to the plugin. The
-plugin tracks turn count per session via its internal state.
+**Cadence**: The gauge is injected periodically (the exact cadence is a tuning
+parameter internal to the plugin — turn interval, utilization threshold, or
+both). The plugin tracks turn count per session via its internal state.
 
 The gauge is injected as a `<system-reminder>`-tagged synthetic text part on the
 last user message, following the same pattern OpenCode already uses for plan-mode
@@ -225,8 +224,7 @@ and build-switch reminders (`prompt.ts:1234`, `insertReminders()`):
 ```
 <system-reminder>
 [CONTEXT GAUGE: 67,000 / 100,000 tokens (67%)]
-When context utilization exceeds 60%, look for opportunities to prune stale
-content using the prune tool.
+Consider pruning stale content if context pressure is building.
 </system-reminder>
 ```
 
