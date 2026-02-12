@@ -527,8 +527,8 @@ JSON, the `updateMessage` wrapper must validate after the callback runs:
    calling `fn(draft)` and throw if any differ afterward.
 2. **Required-field type check**: Parse the draft through `MessageV2.Info` (Zod
    discriminated union) after the callback. This catches missing or wrong-typed
-   required fields (e.g., a plugin deleting `time` or setting `parts` to a
-   string). It does not strip extra fields — that's intentional, since plugin
+   required fields (e.g., a plugin deleting `time` or setting `role` to a
+   number). It does not strip extra fields — that's intentional, since plugin
    metadata is stored as extra data within the `metadata` bag.
 
 ### Change 4: Formalize `messages` on Plugin ToolContext
