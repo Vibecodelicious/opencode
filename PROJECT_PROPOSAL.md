@@ -89,21 +89,35 @@ and `updateMessage()` on ToolContext. See "Required Upstream Changes" below.
 ### Feature 2: Retrieve Tool
 
 The LLM calls this tool to restore previously pruned content. The plugin:
-1. Reads `ctx.messages` to find messages with archive metadata on them
-2. Returns the original content as the tool result, appended to the current
-   context (preserving LLM cache)
+1. Reads `ctx.messages` to find the anchor message and its followers by checking
+   archive metadata
+2. Clears the archive metadata on the anchor and all follower messages via
+   `ctx.updateMessage()`, restoring them to their un-pruned state
+3. Returns a short status message (e.g., "Restored 5 messages from range
+   msg_abc to msg_xyz. Original content is now visible.")
 
-The messages are still in storage with their full original parts — the transform
-hook only replaces them with placeholders in the ephemeral clone sent to the LLM.
-The archived messages remain marked via their metadata fields — retrieval doesn't
-undo the pruning, but the LLM now has access to the original content for the
-remainder of the session.
+The full original message content was never deleted — the transform hook only
+replaced it with placeholders in the ephemeral clone sent to the LLM. After the
+retrieve tool clears the metadata, the transform hook on the next LLM turn sees
+clean messages and passes them through unmodified. The original content
+reappears naturally in the conversation.
+
+**Why the tool result is short**: All plugin tool output passes through
+`Truncate.output()` in `fromPlugin()` (`registry.ts:73`) — capped at 2000 lines
+/ 50KB, with no plugin opt-out. Small outputs pass through unmodified, but
+returning large archived content as tool output would be truncated. The metadata-clearing approach avoids this entirely: the
+tool result is just a status line, and the actual content restoration happens
+through the transform hook pipeline on the immediate next turn.
+
+**Timing**: Tool results trigger an LLM continuation that goes through the full
+`context()` pipeline (`prompt.ts`), including the transform hook. So the restored
+messages are visible to the LLM on the very next assistant turn — not delayed.
 
 **Upstream hook used**: `tool` (existing)
 
-**Upstream change required**: None beyond what Feature 1 requires. The retrieve
-tool only needs read access to messages (`ctx.messages`) and the archive metadata
-already stored on those messages.
+**Upstream change required**: `updateMessage()` on ToolContext (same as Feature
+1). The retrieve tool uses `ctx.updateMessage()` to clear metadata on each
+message in the range.
 
 ### Feature 3: Archived Message Rendering + Message ID Prefixing
 
@@ -292,11 +306,12 @@ for (const msg of rangeFollowers) {
 }
 ```
 
-**Why metadata survives**: The `metadata` field is part of the `MessageV2.Base`
-schema (`z.record(z.unknown()).optional()`), so Zod preserves it through
-parsing. `Session.updateMessage()` (`session/index.ts:378`) carries the field
-through naturally because it's a known schema field on the in-memory message
-object. No schema bypass needed.
+**Why metadata survives** (after Change 1 is applied): Once `metadata` is added
+to `MessageV2.Base` as `z.record(z.unknown()).optional()`, Zod preserves it
+through parsing. Any code path that parses messages through the schema — including
+`Session.updateMessage()` (`session/index.ts:378`), which wraps inputs through
+`fn(MessageV2.Info, ...)` (`util/fn.ts:5`) — will carry the field through because
+it's a known schema field. No schema bypass needed.
 
 The plugin's `ctx.updateMessage()` uses `Storage.update()` (atomic
 read-modify-write) for safe concurrent writes, but this is just good practice —
@@ -332,8 +347,9 @@ plugin's data shape.
 **How it's used**:
 - The **prune tool** writes archive data via `ctx.updateMessage()` into
   `metadata["context-bonsai"]`
-- The **retrieve tool** reads and validates archive data from `ctx.messages`
-  using the plugin-local schema
+- The **retrieve tool** reads archive data from `ctx.messages` using the
+  plugin-local schema, then clears it via `ctx.updateMessage()` to restore
+  the original messages
 - The **transform hook** checks each message for archive metadata to identify
   which messages to replace with placeholders
 
@@ -356,7 +372,13 @@ const Base = z.object({
 })
 ```
 
-**Estimated scope**: 1 line.
+**Estimated scope**: 1 line in `message-v2.ts`, plus SDK type regeneration. The
+SDK `Message` types (`packages/sdk/js/src/v2/gen/types.gen.ts`) are generated and
+currently lack `metadata`. The plugin hooks (`experimental.chat.messages.transform`
+at `packages/plugin/src/index.ts:197`) are typed with the SDK `Message`, so
+plugins won't see `metadata` at the type level until the SDK is regenerated. The
+regeneration is automated (`./packages/sdk/js/script/build.ts`) — no manual SDK
+editing required.
 
 **Why this is needed**: Plugins need to persist data alongside messages (archive
 summaries, index terms, pruning markers). Without a schema-blessed field, custom
@@ -458,17 +480,36 @@ const pluginCtx = {
   directory: Instance.directory,
   worktree: Instance.worktree,
   updateMessage: async (id: string, fn: (draft: any) => void) => {
-    await Storage.update(["message", ctx.sessionID, id], fn)
-    Bus.publish(MessageV2.Event.Updated, { info: await Storage.read(["message", ctx.sessionID, id]) })
+    const updated = await Storage.update(["message", ctx.sessionID, id], (draft) => {
+      const before = { id: draft.id, sessionID: draft.sessionID, role: draft.role }
+      fn(draft)
+      if (draft.id !== before.id || draft.sessionID !== before.sessionID || draft.role !== before.role)
+        throw new Error("plugin mutated identity fields")
+      MessageV2.Info.parse(draft) // required-field type check before write
+    })
+    Bus.publish(MessageV2.Event.Updated, { info: updated })
   },
 } as unknown as PluginToolContext
 ```
 
 This uses `Storage.update()` (`storage/storage.ts:179`) — atomic
-read-modify-write with a write lock. This is preferred over
-`Session.updateMessage()` (`session/index.ts:378`) because `Storage.update()`
-reads the current state from disk before applying the mutation, avoiding stale
-writes if multiple operations target the same message.
+read-modify-write with a write lock. The callback wraps the plugin's `fn(draft)`
+with identity guards and `MessageV2.Info` Zod schema validation. If either
+check fails, `Storage.update()` throws before writing — the file on disk is
+unchanged. Note that Zod's `.parse()` catches missing or wrong-typed required
+fields (e.g., deleting `time` or setting `role` to a number) but does not strip
+extra fields from the draft — it returns a new object while the original draft is
+what gets written. This means the guard is a **required-field type check**, not a
+full sanitizer. Extra fields (like `metadata` entries) pass through, which is the
+desired behavior for plugin data.
+
+This is preferred over `Session.updateMessage()` (`session/index.ts:378`) for two
+reasons: (1) `Storage.update()` reads the current state from disk before applying
+the mutation, avoiding stale writes if multiple operations target the same
+message, and (2) `Session.updateMessage()` is wrapped by `fn(MessageV2.Info, ...)`
+(`util/fn.ts:5`) which calls `schema.parse(input)` and passes the *parsed* result
+to the callback — meaning Zod's default stripping of unknown keys would drop any
+fields not yet in the schema.
 
 **Files changed**:
 
@@ -477,14 +518,18 @@ writes if multiple operations target the same message.
 | `packages/plugin/src/tool.ts` | Add `updateMessage` to `ToolContext` type |
 | `packages/opencode/src/tool/registry.ts` | Implement `updateMessage` in `fromPlugin()` |
 
-**Estimated scope**: ~10 lines across 2 files.
+**Estimated scope**: ~15 lines across 2 files.
 
-**Safety guards**: The implementation must enforce identity-field immutability.
-After the callback runs, the implementation checks that `id`, `sessionID`, and
-`role` are unchanged from their pre-callback values and throws if any differ.
-This prevents plugin bugs from corrupting message identity or moving messages
-between sessions. The guard is implemented in `fromPlugin()` by capturing the
-identity fields before calling `fn(draft)` and comparing after.
+**Safety guards**: Since `Storage.update()` (`storage/storage.ts:179`) writes raw
+JSON, the `updateMessage` wrapper must validate after the callback runs:
+
+1. **Identity-field immutability**: Capture `id`, `sessionID`, and `role` before
+   calling `fn(draft)` and throw if any differ afterward.
+2. **Required-field type check**: Parse the draft through `MessageV2.Info` (Zod
+   discriminated union) after the callback. This catches missing or wrong-typed
+   required fields (e.g., a plugin deleting `time` or setting `parts` to a
+   string). It does not strip extra fields — that's intentional, since plugin
+   metadata is stored as extra data within the `metadata` bag.
 
 ### Change 4: Formalize `messages` on Plugin ToolContext
 
@@ -560,7 +605,8 @@ plugins to cache this data from other hooks.
 │    │     - writes archive metadata via ctx.updateMessage  │
 │    │   • retrieve tool                                   │
 │    │     - reads ctx.messages (checks archive metadata)   │
-│    │     - returns original content as tool result        │
+│    │     - clears metadata via ctx.updateMessage()        │
+│    │     - returns short status (content restored by hook)│
 │                                                          │
 │  system prompt:                                          │
 │    ── Plugin: system.transform ──────────────────────── │
@@ -618,6 +664,21 @@ tools access the underlying data. A prune executed on turn N writes archive
 metadata to the messages via `ctx.updateMessage()`; the transform hook on turn
 N+1 sees the metadata on the freshly-loaded messages and renders them as
 placeholders. There is no race.
+
+**Within-step staleness**: Messages are loaded from storage once per step iteration
+(`prompt.ts:285`) and assigned to the tool context at `prompt.ts:691`. All tool
+calls in the same step share this snapshot. If
+the LLM makes multiple tool calls in one response (e.g., prune then immediately
+retrieve), the second tool call sees the stale `ctx.messages` without metadata
+changes from the first. This is acceptable for the prune/retrieve workflow — each
+operates independently and takes effect on the next step iteration when messages
+are reloaded from storage.
+
+**Reminder injection visibility**: `insertReminders()` (`prompt.ts:540`) modifies
+`msgs` *before* the clone at line 599. Since `ctx.messages` references `msgs`,
+tool calls see messages with injected reminders (plan-mode, build-switch, etc.).
+The prune tool's summarization prompt should account for this — reminder text
+mixed into messages could pollute summaries if not filtered.
 
 ### Concurrent Sessions
 
