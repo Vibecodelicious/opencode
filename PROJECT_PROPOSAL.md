@@ -12,12 +12,13 @@ destructively summarized and no longer recoverable. The goal is to avoid
 triggering that built-in compaction by staying ahead of the context limit through
 continuous, targeted pruning.
 
-**The plugin requires five small upstream changes to OpenCode**: a `metadata`
+**The plugin requires six small upstream changes to OpenCode**: a `metadata`
 bag on the message schema (for plugin data persistence), `messages` formalized
 on the plugin `ToolContext` (for reading the conversation), `languageModel` on
 `ToolContext` (for summarization), `updateMessage(id, fn)` on `ToolContext`
-(for writing metadata), and `pluginID` on `ToolContext` (for consistent metadata
-namespacing).
+(for writing metadata), `pluginID` on `ToolContext` (for consistent metadata
+namespacing), and enriched transform hook input (for session/model context
+without fragile side caches).
 
 ---
 
@@ -226,13 +227,10 @@ content using the prune tool.
 injecting the gauge text into the message array. `event` (existing) and
 `chat.params` (existing) for data collection.
 
-**No upstream change required.** The hook input is `{}` (no session/model info),
-but the plugin works around this by caching data from other hooks.
-
-**Nice-to-have upstream improvement**: Enrich the transform hook input from `{}`
-to `{ sessionID, model }`. This would eliminate the need for the plugin to
-maintain cached state, making the gauge logic simpler and less fragile. This is a
-one-line change at `prompt.ts:620`.
+**Upstream change required**: Change 6 (enrich transform hook input with
+`{ sessionID, model }`). Without this change, the plugin must maintain per-session
+caches for session identity and model limits populated from `chat.params` — see
+Change 6 for the full rationale and the workaround if this change is deferred.
 
 **Token budget note**: The gauge text and system prompt guidance (Feature 5)
 consume tokens from the context window. The gauge is ~30 tokens; the system
@@ -640,9 +638,9 @@ plugin's own key.
 **Estimated scope**: ~5 lines across 3 files (`plugin/src/tool.ts`,
 `plugin/index.ts`, `tool/registry.ts`).
 
-### Optional: Enrich Transform Hook Input
+### Change 6: Enrich Transform Hook Input
 
-Change `prompt.ts:620` from:
+**What**: Change `prompt.ts:620` from:
 ```typescript
 await Plugin.trigger("experimental.chat.messages.transform", {}, { messages: sessionMessages })
 ```
@@ -651,8 +649,36 @@ to:
 await Plugin.trigger("experimental.chat.messages.transform", { sessionID, model }, { messages: sessionMessages })
 ```
 
-This gives the transform hook session and model context, eliminating the need for
-plugins to cache this data from other hooks.
+**Why this is needed**: The transform hook currently receives `{}` as its input —
+no session or model context. Any plugin that needs session-specific or
+model-specific logic in the transform hook (gauge injection, provider-aware
+rendering, budget calculations) must maintain side caches populated from other
+hooks:
+
+- Cache model/limits from `chat.params`
+- Cache token usage from `event` (`message.updated`)
+- Key all cached data by session ID (derived from other hooks)
+
+This creates fragile ordering dependencies (transform depends on other hooks
+having fired first), silent degradation when cache misses occur (e.g., after
+process restart or if an event is dropped), and multi-session bookkeeping
+complexity that every plugin must implement independently.
+
+Passing `{ sessionID, model }` directly to the transform hook eliminates these
+caches for session identity and model limits. Token usage caching from `event`
+hooks is still required (no hook provides current-turn token counts yet), but
+the most error-prone caches — session identity and model context — become
+unnecessary.
+
+**Without this change**: The Context Bonsai plugin still works, but must maintain
+per-session caches for `sessionID` and `model.limit.context` populated from
+`chat.params` and correlated by session. Other plugins doing message
+transformation face the same burden. The plugin's Feature 4 (Context Gauges)
+describes this workaround.
+
+**Estimated scope**: 1 line at `prompt.ts:620`. The `sessionID` and `model`
+variables are already in scope. Backward compatible — existing plugins that
+ignore the input are unaffected.
 
 ---
 
@@ -781,10 +807,11 @@ independent state with no cross-contamination.
    could corrupt the original data. The plugin should defensively copy any arrays
    it modifies.
 
-3. **Transform hook input is empty**: The `experimental.chat.messages.transform`
-   input is `{}`, so the plugin must cache session/model info from other hooks.
-   This adds complexity but is not a blocker. The optional upstream improvement
-   (adding `{ sessionID, model }` to the input) would simplify this.
+3. **Transform hook input enrichment dependency**: Change 6 enriches the
+   transform hook input from `{}` to `{ sessionID, model }`. If this change is
+   deferred, the plugin falls back to caching session/model info from other hooks
+   (see Change 6 "Without this change" section). This adds complexity and
+   fragility but is not a blocker.
 
 4. **Plugin state reliability**: The plugin holds ephemeral state in module-level
    variables (token counts, model limits, ID-visibility flags per session).
