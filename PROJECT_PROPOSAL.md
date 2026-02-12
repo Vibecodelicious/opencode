@@ -92,8 +92,12 @@ and `updateMessage()` on ToolContext. See "Required Upstream Changes" below.
 
 ### Feature 2: Retrieve Tool
 
-The LLM calls this tool to restore previously pruned content. The plugin:
-1. Reads `ctx.messages` to find anchor messages with archive metadata
+The LLM calls this tool with an `anchor_id` argument (the ID of the anchor
+message to restore). The LLM knows which anchors exist because the transform
+hook renders placeholders with visible anchor and range-end IDs (see Feature 3).
+
+The plugin:
+1. Validates that `anchor_id` exists in `ctx.messages` and has archive metadata
 2. Clears the archive metadata on the anchor via a single `ctx.updateMessage()`
    call, restoring the entire range to its un-pruned state
 3. Returns a short status message (e.g., "Restored 5 messages from range
@@ -142,6 +146,19 @@ the conversation is sent to the LLM, the plugin intercepts the message list and:
    membership is determined solely by position relative to the anchor.
 3. **Prefixes message IDs** when the ID-visibility flag is set (phase 1 of the
    prune flow), so the LLM can reference messages by ID.
+
+**Follower identification edge cases**: Messages are ordered by ULID-based IDs
+(`Identifier.ascending()`), so chronological order is guaranteed under normal
+operation. Two edge cases to handle:
+- **`rangeEnd` missing** (e.g., message deleted via session revert, or filtered
+  out by `filterCompacted()`): The plugin treats the anchor as a degenerate
+  single-message archive — replace the anchor with a placeholder, but remove no
+  followers. This is a safe fallback: no content is hidden beyond the anchor
+  itself, and the summary is still useful context.
+- **Multiple pruned ranges**: The transform hook must process all anchors in a
+  single pass. It should collect the set of message indices to remove first, then
+  filter the array once — not splice during iteration, which would shift indices
+  and corrupt subsequent range boundaries.
 
 **Upstream hook used**: `experimental.chat.messages.transform` (existing —
 `packages/opencode/src/session/prompt.ts:620`)
