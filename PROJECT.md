@@ -119,7 +119,7 @@ Everything else works with existing hooks.
 Solved by adding `metadata` to the message schema. Since it's a known Zod
 field, it survives `Session.updateMessage()` which parses inputs through
 `fn(MessageV2.Info, ...)` (`util/fn.ts:5`). No schema bypass needed. Plugin
-data is stored in `msg.metadata["context-bonsai"]`, namespaced to avoid
+data is stored in `msg.metadata[ctx.pluginID]`, namespaced to avoid
 cross-plugin conflicts.
 
 ## Status / Next Steps

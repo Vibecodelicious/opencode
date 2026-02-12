@@ -840,8 +840,7 @@ independent state with no cross-contamination.
    `as unknown as PluginToolContext` cast in `registry.ts:67-71`. This is an
    undocumented leak. If upstream ever changes the internal `Tool.Context` shape,
    plugins relying on leaked fields will break silently. Formalizing `messages`
-   on the plugin ToolContext type (the optional upstream change) eliminates this
-   fragility.
+   on the plugin ToolContext type (Change 4) eliminates this fragility.
 
 ---
 
