@@ -9,10 +9,10 @@ context while preserving summaries, and to retrieve the original content if
 needed later. The goal is to avoid catastrophic batch compaction by staying ahead
 of the context limit through continuous, targeted pruning.
 
-**The plugin requires one upstream change to OpenCode**: exposing a
-`languageModel` field on the plugin `ToolContext`. All other functionality maps
-onto existing upstream plugin hooks, including message access that already leaks
-through to plugins via the internal context.
+**The plugin requires two upstream changes to OpenCode**: exposing
+`languageModel` and `updateMessage(id, fn)` on the plugin `ToolContext`. All
+other functionality maps onto existing upstream plugin hooks, including message
+read access that already leaks through to plugins via the internal context.
 
 ---
 
@@ -58,8 +58,8 @@ to_id.]"
    array already available on the tool context — see "Upstream State" below)
 2. Calls `generateText()` using `ctx.languageModel` with a summarization prompt
    to produce a summary + index terms
-3. Writes archive metadata to the plugin's sidecar storage file (see "Archive
-   Storage" below)
+3. Writes archive metadata directly onto the messages via `ctx.updateMessage()`
+   (see "Archive Storage" below)
 4. Clears the ID-visibility flag
 5. Returns a notification to the user describing what was pruned and the summary
 
@@ -82,35 +82,35 @@ phases by checking whether arguments are present.
 
 **Upstream hook used**: `tool` (existing — `packages/plugin/src/index.ts`)
 
-**Upstream change required**: `languageModel` on ToolContext. See "Required
-Upstream Change" below.
+**Upstream changes required**: `languageModel` and `updateMessage()` on
+ToolContext. See "Required Upstream Changes" below.
 
 ### Feature 2: Retrieve Tool
 
 The LLM calls this tool to restore previously pruned content. The plugin:
-1. Reads the archive metadata from the plugin's sidecar storage
-2. Finds the original messages from `ctx.messages` (the messages are still in
-   storage — they're just rendered as placeholders by the transform hook)
-3. Returns the original content as the tool result, appended to the current
+1. Reads `ctx.messages` to find messages with archive metadata on them
+2. Returns the original content as the tool result, appended to the current
    context (preserving LLM cache)
 
-The archived messages remain marked in sidecar storage — retrieval doesn't undo
-the pruning. But the LLM now has access to the original content for the
+The messages are still in storage with their full original parts — the transform
+hook only replaces them with placeholders in the ephemeral clone sent to the LLM.
+The archived messages remain marked via their metadata fields — retrieval doesn't
+undo the pruning, but the LLM now has access to the original content for the
 remainder of the session.
 
 **Upstream hook used**: `tool` (existing)
 
 **Upstream change required**: None beyond what Feature 1 requires. The retrieve
-tool only needs read access to messages (`ctx.messages`) and the sidecar file.
+tool only needs read access to messages (`ctx.messages`) and the archive metadata
+already stored on those messages.
 
 ### Feature 3: Archived Message Rendering + Message ID Prefixing
 
 This is the core mechanism that makes pruning effective. On every turn, before
 the conversation is sent to the LLM, the plugin intercepts the message list and:
 
-1. **Replaces archived messages with placeholders.** For each message whose ID
-   appears in the plugin's sidecar archive index, the plugin replaces its parts
-   with a single text part:
+1. **Replaces archived messages with placeholders.** For each message that has
+   archive metadata on it, the plugin replaces its parts with a single text part:
    ```
    [PRUNED: msg_abc to msg_xyz]
    Summary: <the generated summary>
@@ -261,49 +261,67 @@ change with zero implementation work.
 
 ---
 
-## Archive Storage: Sidecar Approach
+## Archive Storage: Direct Message Annotation
 
-The plugin maintains its own JSON file for archive metadata rather than writing
-to OpenCode's message storage. This eliminates the metadata clobber risk
-entirely.
+The plugin writes archive metadata directly onto messages using
+`ctx.updateMessage()`, which delegates to `Storage.update()` (atomic
+read-modify-write). This is the same approach used by the `surgical_compaction`
+branch's direct integration.
 
-**Storage location**: A JSON file per session in the plugin's data directory
-(e.g., `~/.config/opencode/plugin-data/context-bonsai/<sessionID>.json`).
+**How it works**: When the prune tool archives a range, it calls
+`ctx.updateMessage(id, fn)` on the anchor message (the first message in the
+range) to add archive fields:
 
-**Schema**:
-```json
-{
-  "archives": {
-    "msg_abc": {
-      "summary": "Debugging attempts - tried token refresh, session storage...",
-      "indexTerms": ["auth", "debugging", "middleware"],
-      "rangeEnd": "msg_xyz"
-    }
+```typescript
+await ctx.updateMessage(fromId, (draft) => {
+  draft.archive = {
+    summary: "Debugging attempts - tried token refresh, session storage...",
+    indexTerms: ["auth", "debugging", "middleware"],
+    rangeEnd: toId,
   }
+})
+// Mark follower messages as archived-by
+for (const msg of rangeFollowers) {
+  await ctx.updateMessage(msg.info.id, (draft) => {
+    draft.archivedBy = fromId
+  })
 }
 ```
 
+**Why this is safe**: `Session.updateMessage()` (`session/index.ts:378`) would
+destroy plugin fields through two mechanisms: Zod stripping (the `fn()` wrapper
+at `util/fn.ts:5` calls `MessageV2.Info.parse()` which strips unknown keys) and
+blind `Storage.write()` overwrite. However, an audit of every
+`Session.updateMessage()` call site in the codebase (`prompt.ts`,
+`processor.ts`, `compaction.ts`, `summary.ts`, `plan.ts`,
+`cli/cmd/debug/agent.ts`) confirms that **none of them update old, finalized
+messages**. Every call either creates a new message or updates the current
+in-progress assistant/user message from the active turn. Messages eligible for
+pruning are always old and finalized — no core code path will overwrite them.
+
+The plugin's `ctx.updateMessage()` uses `Storage.update()` (atomic
+read-modify-write) which bypasses both Zod stripping and blind overwrite,
+preserving all existing fields on the message. This is defense-in-depth: the
+primary safety guarantee is the "no core code touches old messages" invariant;
+`Storage.update()` is the backup.
+
 **How it's used**:
-- The **prune tool** writes to this file after successful summarization
-- The **retrieve tool** reads from this file
-- The **transform hook** reads from this file every turn to identify which
-  messages to replace with placeholders
+- The **prune tool** writes `archive`/`archivedBy` fields via `ctx.updateMessage()`
+- The **retrieve tool** reads archive metadata from `ctx.messages`
+- The **transform hook** checks each message for `archive`/`archivedBy` fields
+  to identify which messages to replace with placeholders
 
-**Advantages over writing to message JSON**:
-- No risk of OpenCode's `Session.updateMessage()` (`session/index.ts:378`,
-  which uses `Storage.write()` — a blind overwrite) clobbering plugin fields
-- No dependency on `Storage.update()` being exposed to plugins
-- The plugin fully owns its data lifecycle
-- Reduces the upstream change footprint (no `updateMessage` needed)
-
-**Trade-off**: One extra file read per turn in the transform hook. Since the
-sidecar is small JSON and local disk, this is negligible.
+**Advantages over a separate sidecar file**:
+- No sync risk between archive index and actual messages
+- Archive metadata survives alongside the messages it describes
+- No extra file I/O per turn in the transform hook
+- Mirrors the proven approach from the `surgical_compaction` branch
 
 ---
 
-## Required Upstream Change
+## Required Upstream Changes
 
-### Add `languageModel` to Plugin ToolContext
+### Change 1: Add `languageModel` to Plugin ToolContext
 
 **What**: Expose the session's pre-configured `LanguageModelV2` instance on the
 plugin `ToolContext`.
@@ -319,18 +337,14 @@ export type ToolContext = {
 }
 ```
 
-**Implementation site**: `packages/opencode/src/tool/registry.ts`,
-`fromPlugin()` function (line 60). This function constructs the plugin tool
-context by spreading the internal `Tool.Context`. The `languageModel` needs to
-be added to this spread.
-
-The internal `Tool.Context` (built in `prompt.ts:684`, the `context()` helper
-inside `resolveTools()`) does not currently include `languageModel`. It would
-need to be added there. The `model` parameter is available in `resolveTools()`
-scope (`input.model`, which is a `Provider.Model`), and
-`Provider.getLanguage(model)` (`provider/provider.ts:1110`) returns the
-`LanguageModelV2` instance. This is an async call, so it should be resolved once
-in `resolveTools()` and threaded through.
+**Implementation site**: The internal `Tool.Context` (built in `prompt.ts:684`,
+the `context()` helper inside `resolveTools()`) does not currently include
+`languageModel`. It would need to be added there. The `model` parameter is
+available in `resolveTools()` scope (`input.model`, which is a
+`Provider.Model`), and `Provider.getLanguage(model)` (`provider/provider.ts:1110`)
+returns the `LanguageModelV2` instance. This is an async call, so it should be
+resolved once in `resolveTools()` and threaded through. It passes to plugins
+automatically via the `...ctx` spread in `registry.ts:fromPlugin()` (line 67).
 
 **Files changed**:
 
@@ -363,6 +377,73 @@ triggered, no events emitted.
 **Why this is general-purpose**: Any plugin tool that needs side-effect-free LLM
 calls benefits from this. Examples: summarization, classification, content
 extraction, automated labeling.
+
+### Change 2: Add `updateMessage()` to Plugin ToolContext
+
+**What**: Expose an atomic message update function on the plugin `ToolContext`.
+
+**Type definition** (in `packages/plugin/src/tool.ts`):
+
+```typescript
+export type ToolContext = {
+  // ... existing fields ...
+  updateMessage(id: string, fn: (draft: MessageInfo) => void): Promise<void>
+}
+```
+
+**Implementation site**: `registry.ts:fromPlugin()` (line 60). The function
+constructs the plugin context by spreading `...ctx`. Since `updateMessage` is
+not on the internal `Tool.Context`, it must be added explicitly. The
+implementation delegates to `Storage.update()`:
+
+```typescript
+const pluginCtx = {
+  ...ctx,
+  directory: Instance.directory,
+  worktree: Instance.worktree,
+  updateMessage: async (id: string, fn: (draft: any) => void) => {
+    await Storage.update(["message", ctx.sessionID, id], fn)
+    Bus.publish(MessageV2.Event.Updated, { info: await Storage.read(["message", ctx.sessionID, id]) })
+  },
+} as unknown as PluginToolContext
+```
+
+This uses `Storage.update()` (`storage/storage.ts:179`) — atomic
+read-modify-write with a write lock — which preserves all existing fields on the
+message. This is distinct from the existing `Session.updateMessage()`
+(`session/index.ts:378`) which uses `Storage.write()` (blind overwrite).
+
+**Files changed**:
+
+| File | Change |
+|------|--------|
+| `packages/plugin/src/tool.ts` | Add `updateMessage` to `ToolContext` type |
+| `packages/opencode/src/tool/registry.ts` | Implement `updateMessage` in `fromPlugin()` |
+
+**Estimated scope**: ~10 lines across 2 files.
+
+**Why `Storage.update()` and not `Session.updateMessage()`**: An audit of all
+`Session.updateMessage()` call sites (`prompt.ts`, `processor.ts`,
+`compaction.ts`, `summary.ts`, `plan.ts`, `cli/cmd/debug/agent.ts`) confirms
+that core code never overwrites old finalized messages — every call either
+creates new messages or updates the current in-progress message. However,
+`Session.updateMessage()` has TWO layers that would destroy plugin fields if it
+were ever called on an annotated message:
+1. **Zod stripping**: It's wrapped with `fn(MessageV2.Info, ...)` (`util/fn.ts:5`),
+   which calls `MessageV2.Info.parse(input)`. Zod's default behavior strips
+   unknown keys, so `archive`/`archivedBy` fields would be removed before the
+   write even reaches storage.
+2. **Blind overwrite**: It uses `Storage.write()` which overwrites the entire
+   JSON file, discarding any fields not in the written object.
+
+Using `Storage.update()` bypasses both layers — it reads the existing JSON,
+applies the mutation function, and writes back, preserving all fields. This is
+defense-in-depth: the "no core code touches old messages" invariant is the
+primary safety guarantee, and `Storage.update()` is the backup.
+
+**Safety guard**: The implementation should throw if the `fn` callback attempts
+to change identity fields (`id`, `sessionID`, `role`), preventing plugin bugs
+from corrupting message data.
 
 ### Optional: Formalize `messages` on Plugin ToolContext
 
@@ -409,7 +490,7 @@ plugins to cache this data from other hooks.
 │    3. Clone messages                                     │
 │    4. System-reminder wrapping                           │
 │    5. ── Plugin: messages.transform ──────────────────── │
-│    │     • Read sidecar archive index                    │
+│    │     • Check messages for archive metadata            │
 │    │     • Replace archived msgs with placeholders       │
 │    │     • Remove range-follower messages                │
 │    │     • Prefix IDs if visibility flag set              │
@@ -422,9 +503,9 @@ plugins to cache this data from other hooks.
 │    │   • prune tool (two-phase)                          │
 │    │     - reads ctx.messages                            │
 │    │     - calls ctx.languageModel for summarization     │
-│    │     - writes to sidecar archive file                │
+│    │     - writes archive metadata via ctx.updateMessage  │
 │    │   • retrieve tool                                   │
-│    │     - reads ctx.messages + sidecar file              │
+│    │     - reads ctx.messages (checks archive metadata)   │
 │    │     - returns original content as tool result        │
 │                                                          │
 │  system prompt:                                          │
@@ -441,9 +522,9 @@ plugins to cache this data from other hooks.
 │    │   • Cache model.limit.context for gauge %           │
 └─────────────────────────────────────────────────────────┘
 
-Sidecar storage (plugin-owned):
-  ~/.config/opencode/plugin-data/context-bonsai/<sessionID>.json
-  Contains: archive metadata (summaries, index terms, ranges)
+Archive metadata lives directly on message JSON:
+  msg.archive = { summary, indexTerms, rangeEnd }
+  msg.archivedBy = <anchor message ID>
 ```
 
 ---
@@ -466,8 +547,8 @@ when the OpenCode process restarts. State reconstruction on restart:
 - **Turn counter for gauge cadence**: Resets to 0 (acceptable — means the gauge
   fires sooner after restart, which is harmless).
 
-The durable sidecar archive file is NOT affected by restarts — all pruned data is
-preserved.
+Archive metadata is stored directly on messages in OpenCode's storage and is NOT
+affected by restarts — all pruned data is preserved.
 
 ### Transform Hook / Tool Execution Ordering
 
@@ -479,15 +560,17 @@ The transform hook and the prune/retrieve tools operate on different data views:
    which is the pre-clone, pre-transform original populated at `prompt.ts:691`.
 
 These never conflict: the transform hook produces the view the LLM sees, while the
-tools access the underlying data. A prune executed on turn N writes to the sidecar
-file; the transform hook on turn N+1 reads the updated sidecar file and renders
-the newly-pruned messages as placeholders. There is no race.
+tools access the underlying data. A prune executed on turn N writes archive
+metadata to the messages via `Storage.update()`; the transform hook on turn N+1
+sees the metadata on the freshly-loaded messages and renders them as placeholders.
+There is no race.
 
 ### Concurrent Sessions
 
-Plugin state is keyed by session ID (one state map per session). Sidecar files
-are per-session (`<sessionID>.json`). Concurrent sessions in the same process
-operate on independent state and independent files with no cross-contamination.
+Plugin ephemeral state is keyed by session ID (one state map per session).
+Archive metadata lives on the messages themselves (already scoped to a session by
+OpenCode's storage layout). Concurrent sessions in the same process operate on
+independent state with no cross-contamination.
 
 ---
 
@@ -509,11 +592,12 @@ operate on independent state and independent files with no cross-contamination.
    This adds complexity but is not a blocker. The optional upstream improvement
    (adding `{ sessionID, model }` to the input) would simplify this.
 
-4. **Plugin state reliability**: The plugin holds state in module-level variables
-   (token counts, model limits, ID-visibility flags per session). Plugins are
-   loaded once at startup and persist for the process lifetime, so this is
-   reliable. But if OpenCode ever supports plugin hot-reloading, state would be
-   lost. The sidecar file provides durability for archive metadata.
+4. **Plugin state reliability**: The plugin holds ephemeral state in module-level
+   variables (token counts, model limits, ID-visibility flags per session).
+   Plugins are loaded once at startup and persist for the process lifetime, so
+   this is reliable. But if OpenCode ever supports plugin hot-reloading, ephemeral
+   state would be lost. Archive metadata is durable (stored directly on messages)
+   and unaffected by hot-reloading.
 
 5. **Interaction with built-in compaction**: If the plugin doesn't prune
    aggressively enough, OpenCode's built-in overflow compaction
@@ -526,13 +610,10 @@ operate on independent state and independent files with no cross-contamination.
    original `msgs` array (`prompt.ts:510-516`) rather than the transform hook's
    ephemeral clone. This means compaction may redundantly summarize content the
    plugin already summarized. This is acceptable — redundant summarization is
-   harmless, and the plugin's sidecar metadata remains valid regardless.
+   harmless, and the plugin's archive metadata on the messages remains valid
+   regardless.
 
-6. **Sidecar file lifecycle**: The sidecar archive file must be cleaned up when
-   sessions are deleted. The plugin can subscribe to session deletion events via
-   the `event` hook and remove the corresponding sidecar file.
-
-7. **Unsafe cast in `fromPlugin()`**: Plugin tools already receive internal
+6. **Unsafe cast in `fromPlugin()`**: Plugin tools already receive internal
    fields (including `messages`, `callID`, `extra`) through the
    `as unknown as PluginToolContext` cast in `registry.ts:67-71`. This is an
    undocumented leak. If upstream ever changes the internal `Tool.Context` shape,
