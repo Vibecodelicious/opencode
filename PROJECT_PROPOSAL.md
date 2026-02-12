@@ -12,11 +12,12 @@ destructively summarized and no longer recoverable. The goal is to avoid
 triggering that built-in compaction by staying ahead of the context limit through
 continuous, targeted pruning.
 
-**The plugin requires four small upstream changes to OpenCode**: a `metadata`
+**The plugin requires five small upstream changes to OpenCode**: a `metadata`
 bag on the message schema (for plugin data persistence), `messages` formalized
 on the plugin `ToolContext` (for reading the conversation), `languageModel` on
-`ToolContext` (for summarization), and `updateMessage(id, fn)` on `ToolContext`
-(for writing metadata).
+`ToolContext` (for summarization), `updateMessage(id, fn)` on `ToolContext`
+(for writing metadata), and `pluginID` on `ToolContext` (for consistent metadata
+namespacing).
 
 ---
 
@@ -345,11 +346,11 @@ read-modify-write) for safe concurrent writes, but this is just good practice �
 not a workaround for schema issues.
 
 **Namespacing**: Each plugin writes only to its own key within `metadata`
-(e.g., `metadata["context-bonsai"]`). Other plugins use their own keys. No
-enforcement mechanism is needed — plugins already have shell access, so the
-trust boundary is established at the plugin installation level. This follows the
-same convention as npm `package.json` keys, Kubernetes annotations, and HTTP
-headers.
+(e.g., `metadata["context-bonsai"]`), using `ctx.pluginID` (see Change 5) rather
+than hardcoded strings. Other plugins use their own keys. No enforcement
+mechanism is needed — plugins already have shell access, so the trust boundary is
+established at the plugin installation level. This follows the same convention as
+npm `package.json` keys, Kubernetes annotations, and HTTP headers.
 
 **Plugin-local schema validation**: The upstream `metadata` bag is untyped
 (`z.record(z.unknown())`). The plugin defines its own strict Zod schema for its
@@ -505,6 +506,8 @@ const pluginCtx = {
   ...ctx,
   directory: Instance.directory,
   worktree: Instance.worktree,
+  messages: ctx.messages,          // Change 4: explicit mapping
+  pluginID: pluginName,            // Change 5: from plugin loading pipeline
   updateMessage: async (id: string, fn: (draft: any) => void) => {
     const updated = await Storage.update(["message", ctx.sessionID, id], (draft) => {
       const before = { id: draft.id, sessionID: draft.sessionID, role: draft.role }
@@ -604,6 +607,36 @@ runtime break.
 |------|--------|
 | `packages/plugin/src/tool.ts` | Add `messages` to `ToolContext` type |
 | `packages/opencode/src/tool/registry.ts` | Add explicit `messages: ctx.messages` to `pluginCtx` |
+
+### Change 5: Add `pluginID` to Plugin ToolContext
+
+**What**: Expose the plugin's package name on the tool context so plugins can
+namespace metadata without hardcoding strings.
+
+**Type definition** (in `packages/plugin/src/tool.ts`):
+
+```typescript
+export type ToolContext = {
+  // ... existing fields ...
+  pluginID: string
+}
+```
+
+**Implementation**: `Plugin.list()` (`plugin/index.ts:118`) currently returns
+`Hooks[]` with no source identity. The loading pipeline must associate each
+`Hooks` entry with its source plugin name — the npm package name for installed
+plugins (`pkg` at `plugin/index.ts:60`), or the filename namespace for custom
+tools (`registry.ts:43`). This name is threaded to `fromPlugin()` and set
+explicitly on `pluginCtx`.
+
+**Why this is general-purpose**: Any plugin that uses the `metadata` bag benefits
+from a framework-provided identity rather than hardcoded strings. It also
+enables future upstream tooling — e.g., a debug view that shows which plugin
+owns which metadata keys, or enforced namespacing that rejects writes outside a
+plugin's own key.
+
+**Estimated scope**: ~5 lines across 3 files (`plugin/src/tool.ts`,
+`plugin/index.ts`, `tool/registry.ts`).
 
 ### Optional: Enrich Transform Hook Input
 
