@@ -224,9 +224,11 @@ and build-switch reminders (`prompt.ts:1234`, `insertReminders()`):
 ```
 <system-reminder>
 [CONTEXT GAUGE: 67,000 / 100,000 tokens (67%)]
-Consider pruning stale content if context pressure is building.
 </system-reminder>
 ```
+
+The gauge itself is just data — the behavioral guidance lives in the system prompt
+(Feature 5).
 
 **How the plugin gets token data**:
 - **Token counts**: The `event` hook subscribes to `message.updated` events.
@@ -245,10 +247,11 @@ caches for session identity and model limits populated from `chat.params` — se
 Change 6 for the full rationale and the workaround if this change is deferred.
 
 **Token budget note**: The gauge text and system prompt guidance (Feature 5)
-consume tokens from the context window. The gauge is ~30 tokens; the system
-prompt guidance is a fixed ~200 tokens. These are small relative to a typical
-128K+ context window. The plugin's gauge calculation should account for its own
-injected tokens to avoid slightly over-reporting available space.
+consume tokens from the context window. The gauge is ~30 tokens per injection;
+the system prompt guidance is a fixed cost (estimated ~800-1000 tokens given the
+detailed behavioral policy). These are small relative to a typical 128K+ context
+window. The plugin's gauge calculation should account for its own injected tokens
+to avoid slightly over-reporting available space.
 
 **Gauge staleness**: Token counts come from `message.updated` events on the
 *previous* turn's assistant message. The gauge is always one turn behind — this
@@ -280,9 +283,73 @@ stale or incorrect numbers.
 
 ### Feature 5: System Prompt Guidance
 
-The plugin injects instructions into the system prompt that tell the LLM about
-the prune/retrieve tools, how to interpret context gauges, and when to consider
-pruning.
+The plugin injects behavioral instructions into the system prompt that tell the
+LLM how to use the prune/retrieve tools, how to interpret context gauges, and
+**when and how aggressively to prune**. This guidance is the primary driver of
+pruning behavior — the gauge (Feature 4) provides data, but the system prompt
+defines the decision-making policy.
+
+The guidance below is derived from the `surgical_compaction` branch
+(`packages/opencode/src/tool/compact.txt`), adapted for the plugin architecture.
+
+**Proactive pruning triggers (any gauge level):**
+
+The LLM must prune **immediately** when it detects these patterns, regardless of
+context utilization percentage:
+
+1. **Completed task blocks** — bug investigation concluded and fix applied, plan
+   written and approved, code review finished, feature implemented and tested,
+   research/exploration completed with findings captured, any task where the LLM
+   has moved on to something different
+2. **Project/repo switches** — when the conversation shifts to a different
+   codebase or project, archive the previous project's context before diving in
+3. **Multiple gauges seen without pruning** — if the LLM has seen 2+ context
+   gauges in a session and hasn't pruned, it is being too conservative; review
+   completed work and archive it
+
+**Do not wait for high context utilization to prune completed work.** A 25%
+context with finished debugging sessions should be pruned. Keeping stale
+completed work wastes context space that could be used for the current task.
+
+**Gauge-based escalation:**
+
+- **<30%**: Prune completed work only; no need to prune ongoing work
+- **30-50%**: Prune completed work; monitor ongoing discussions for completion
+- **50-80%**: Actively look for pruning opportunities; completed work should
+  already be archived
+- **>80%**: Strongly consider pruning; prioritize content where learnings are
+  already captured; multiple ranges may be appropriate to maximize space freed
+
+**Content detection patterns:**
+
+- Voluminous tool outputs (file reads, grep results, command output) — IF key
+  insights are captured in the LLM's prior responses
+- Completed discussions where decisions are made and documented
+- Reference material already incorporated into working context
+
+**Quality gate — verify learnings are preserved before pruning:**
+
+Raw content can be archived when the *meaning* is captured elsewhere: in the
+LLM's prior responses/analysis, in the pruning summary the LLM will generate,
+in code/artifacts created as a result, or in decisions already documented. Do NOT
+prune just because content was read — prune when the insights are safe.
+
+**Loop/iteration detection:**
+
+When working through debugging, retrying, or iterating: prior iterations may be
+pruned once a new iteration begins and the LLM has learned from the previous
+ones. The summary MUST capture what was tried in each iteration, what was learned
+(errors, insights, partial successes), any constraints discovered, and the
+current hypothesis. "Debugging session for authentication issues" is an
+unacceptable summary — it loses the debugging insights that a future retrieve
+would need.
+
+**Range partitioning:**
+
+Split a contiguous range into multiple prune calls when different topics are
+intermixed (separate summaries enable targeted retrieval), when the user might
+want partial retrieval, or when a single summary would lose important
+distinctions between sub-topics.
 
 **Upstream hook used**: `experimental.chat.system.transform` (existing —
 `packages/plugin/src/index.ts`). Input includes `{ sessionID?, model }`, so the
