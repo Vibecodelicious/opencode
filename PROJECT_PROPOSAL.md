@@ -632,13 +632,11 @@ what gets written. This means the guard is a **required-field type check**, not 
 full sanitizer. Extra fields (like `metadata` entries) pass through, which is the
 desired behavior for plugin data.
 
-This is preferred over `Session.updateMessage()` (`session/index.ts:378`) for two
-reasons: (1) `Storage.update()` reads the current state from disk before applying
+This is preferred over `Session.updateMessage()` (`session/index.ts:378`) for
+atomicity: `Storage.update()` reads the current state from disk before applying
 the mutation, avoiding stale writes if multiple operations target the same
-message, and (2) `Session.updateMessage()` is wrapped by `fn(MessageV2.Info, ...)`
-(`util/fn.ts:5`) which calls `schema.parse(input)` and passes the *parsed* result
-to the callback — meaning Zod's default stripping of unknown keys would drop any
-fields not yet in the schema.
+message. `Session.updateMessage()` uses `Storage.write()` (blind overwrite),
+which assumes the caller already has the latest state.
 
 **Files changed**:
 
