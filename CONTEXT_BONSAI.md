@@ -169,14 +169,10 @@ token utilization exceeds a threshold (e.g., 50%). Exact values are
 implementation-tunable.
 
 **Data sources**:
-- **Token counts**: Derived from the previous turn's LLM response metadata
-  (input tokens, output tokens, cache counts). Always one turn behind — this is
-  inherent to the event-driven approach, not a bug.
+- **Token counts**: The latest known token utilization at the time the gauge is
+  injected. How the harness obtains this (response metadata, API usage headers,
+  token counting libraries, etc.) is implementation-specific.
 - **Context limit**: From the model's declared context window size.
-
-**Staleness**: After a prune, the gauge still shows pre-prune counts until the
-next LLM response. The LLM can infer reduced utilization from seeing the
-placeholders.
 
 ### Feature 5: System Prompt Guidance
 
@@ -299,11 +295,12 @@ conversation taken at the start of that response. A prune followed by a retrieve
 in the same response will see stale data. The system must detect and reject
 same-step retrieve-after-prune with a clear error.
 
-### Gauge Lag
+### Gauge Accuracy
 
-Token counts in the context gauge are always one turn behind. This is inherent
-and acceptable. The LLM can observe the rendered placeholders to infer that
-pruning reduced utilization even before the gauge updates.
+The context gauge uses the latest known token utilization at the time it is
+injected into the message stream. Freshness depends on the harness — some may
+have exact current-turn counts, others may lag by a turn. The gauge should
+represent the best available data; it need not be perfectly precise.
 
 ### Interaction with Built-in Compaction
 
