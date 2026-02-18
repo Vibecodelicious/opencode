@@ -89,6 +89,7 @@ function createAssistantWithGauge(percent: number): MessageV2.WithParts {
     info: {
       id: msgId,
       role: "assistant",
+      parentID: "",
       sessionID: "test-session",
       mode: "test",
       modelID: "test-model",
@@ -119,6 +120,7 @@ function createSummaryWithGauge(percent: number): MessageV2.WithParts {
     info: {
       id: msgId,
       role: "assistant",
+      parentID: "",
       summary: true, // This marks it as a compaction summary
       sessionID: "test-session",
       mode: "test",
