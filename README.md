@@ -8,7 +8,7 @@ I'm working on a somewhat significant feature addition: the ability for users an
 
 It appears to function with several models including: Claude, GPT, GLM, Kimi, and MiniMax models.
 
-#### Development Treads
+#### Development Threads
 
 There are three active threads of development described below.
 
