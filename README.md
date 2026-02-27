@@ -24,7 +24,9 @@ I'm giving the LLM and the user the ability to surgically remove parts of the co
 
 [Screencast_20260106_235140.webm](https://github.com/user-attachments/assets/3bdeeda0-edc8-4678-8165-5475a03d24df)
 
-For more information, keep reading - there are sections covering the internals of how it works as well as a draft blog post/announcement.
+Several livestreams diving deeper into the workings of LLM coding agents and the work of migrating the featureset to a plugin are on the Vibecodelicious YouTube channel. [Here's a good one to start with.](https://www.youtube.com/watch?v=3g0O10M1jso)
+
+Alternatively, the following sections covering the internals of how it works and there's also a cheesy LLM-generated blog post/announcement after the handcrafted information sections.
 
 ### How Context Bondai Works
 
