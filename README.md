@@ -6,12 +6,17 @@ I'm working on a somewhat significant feature addition: the ability for users an
 
 ### What is the current state of the Context Bonsai feature?
 
-It appears to function with Claude, OpenAI, BigPickle, Amd Kimi models. Right now, it needs extended usage to judge whether the expected benefits of the feature come through. Testing so far has revealed that the model is uneager to do compactions even when the context window is > 70%. I'm continuing to actively use it on projects. Thats my focus now - I'm tuning the tool card and system reminders as I go.
+It appears to function with several models including: Claude, GPT, GLM, Kimi, and MiniMax models.
 
-Once deeper testing is done, then thorough review and cleanup, followed by rebasing on the latest upstream commit and working with the OpenCode project on how to get this merged upstream.
+#### Development Treads
 
-Claude has disabled API use of third party tools via subscription accounts, which is very demotivating since Claude is my preferred model for most work. I also have used tweakcc to add this to Claude Code, but now theyre rejecting that as "third party" as well.
+There are three active threads of development described below.
 
+This featureset needs extended usage to judge whether the expected benefits of the feature come through. Testing so far has revealed that the model is uneager to do compactions even when the context window is > 70%. I'm continuing to actively use it on projects. Thats my focus now - I'm tuning the tool card and system reminders as I go.
+
+Conversion to a plugin. Currently, the feature is deeply integrated as a set of changes to the OpenCode core, making it difficult to maintain as OpenCode development continues. I am restructuring the feature set in a way that is implementable as a plugin with as few changes the the OpenCode core as possible.
+
+Porting the features to other coding agents. I've implemented a version of this in Claude Code by using tweakcc. Next will be the pi coding agent, followed by Codex and Gemini.
 
 ### What is the new feature?
 
