@@ -28,6 +28,7 @@ import { Log } from "@/util"
 import { LspTool } from "./lsp"
 import * as Truncate from "./truncate"
 import { ApplyPatchTool } from "./apply_patch"
+import { MessageV2 } from "@/session/message-v2"
 import { Glob } from "@opencode-ai/shared/util/glob"
 import path from "path"
 import { pathToFileURL } from "url"
@@ -97,6 +98,7 @@ export const layer: Layer.Layer<
     const agents = yield* Agent.Service
     const skill = yield* Skill.Service
     const truncate = yield* Truncate.Service
+    const session = yield* Session.Service
 
     const invalid = yield* InvalidTool
     const task = yield* TaskTool
@@ -141,6 +143,18 @@ export const layer: Layer.Layer<
                   ask: (req) => toolCtx.ask(req),
                   directory: ctx.directory,
                   worktree: ctx.worktree,
+                  updateMessage: (id, mutate) => {
+                    const msg = MessageV2.get({
+                      sessionID: toolCtx.sessionID,
+                      messageID: id as typeof toolCtx.messageID,
+                    })
+                    const next = structuredClone(msg.info)
+                    mutate(next as PluginToolContext["messages"][number]["info"])
+                    next.id = msg.info.id
+                    next.sessionID = msg.info.sessionID
+                    next.role = msg.info.role
+                    return Effect.runPromise(session.updateMessage(next))
+                  },
                 }
                 const result = yield* Effect.promise(() => def.execute(args as any, pluginCtx))
                 const output = typeof result === "string" ? result : result.output
