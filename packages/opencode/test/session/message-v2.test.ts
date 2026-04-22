@@ -109,6 +109,52 @@ function basePart(messageID: string, id: string) {
 }
 
 describe("session.message-v2.toModelMessage", () => {
+  test("preserves metadata on parsed user messages", () => {
+    const parsed = MessageV2.Info.parse({
+      ...userInfo("m-user-meta"),
+      metadata: {
+        context_bonsai: {
+          archived: {
+            anchor_id: "anchor-user",
+          },
+        },
+      },
+    })
+
+    expect(parsed).toMatchObject({
+      metadata: {
+        context_bonsai: {
+          archived: {
+            anchor_id: "anchor-user",
+          },
+        },
+      },
+    })
+  })
+
+  test("preserves metadata on parsed assistant messages", () => {
+    const parsed = MessageV2.Info.parse({
+      ...assistantInfo("m-assistant-meta", "m-user-meta"),
+      metadata: {
+        context_bonsai: {
+          restored: {
+            anchor_id: "anchor-assistant",
+          },
+        },
+      },
+    })
+
+    expect(parsed).toMatchObject({
+      metadata: {
+        context_bonsai: {
+          restored: {
+            anchor_id: "anchor-assistant",
+          },
+        },
+      },
+    })
+  })
+
   test("filters out messages with no parts", async () => {
     const input: MessageV2.WithParts[] = [
       {
