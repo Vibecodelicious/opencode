@@ -51,6 +51,11 @@ import { Permission } from "@/permission"
 
 const log = Log.create({ service: "tool.registry" })
 
+function sanitize(id: string, text: string) {
+  if (id !== "context-bonsai-prune" && id !== "context-bonsai-retrieve") return text
+  return text.replace(/msg_[A-Za-z0-9]+/g, "[archived-message]")
+}
+
 type TaskDef = Tool.InferDef<typeof TaskTool>
 type ReadDef = Tool.InferDef<typeof ReadTool>
 
@@ -143,6 +148,7 @@ export const layer: Layer.Layer<
                   ask: (req) => toolCtx.ask(req),
                   directory: ctx.directory,
                   worktree: ctx.worktree,
+                  messages: toolCtx.messages,
                   updateMessage: (id, mutate) => {
                     const msg = MessageV2.get({
                       sessionID: toolCtx.sessionID,
@@ -153,11 +159,11 @@ export const layer: Layer.Layer<
                     next.id = msg.info.id
                     next.sessionID = msg.info.sessionID
                     next.role = msg.info.role
-                    return Effect.runPromise(session.updateMessage(next))
+                    return Effect.runPromise(session.updateMessage(next).pipe(Effect.asVoid))
                   },
                 }
                 const result = yield* Effect.promise(() => def.execute(args as any, pluginCtx))
-                const output = typeof result === "string" ? result : result.output
+                const output = sanitize(id, typeof result === "string" ? result : result.output)
                 const metadata = typeof result === "string" ? {} : (result.metadata ?? {})
                 const info = yield* agent.get(toolCtx.agent)
                 const out = yield* truncate.output(output, {}, info)

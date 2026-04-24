@@ -110,8 +110,8 @@ function basePart(messageID: string, id: string) {
 
 describe("session.message-v2.toModelMessage", () => {
   test("preserves metadata on parsed user messages", () => {
-    const parsed = MessageV2.Info.parse({
-      ...userInfo("m-user-meta"),
+    const parsed = MessageV2.Info.zod.parse({
+      ...userInfo(MessageID.ascending("msg_user_meta")),
       metadata: {
         context_bonsai: {
           archived: {
@@ -133,8 +133,8 @@ describe("session.message-v2.toModelMessage", () => {
   })
 
   test("preserves metadata on parsed assistant messages", () => {
-    const parsed = MessageV2.Info.parse({
-      ...assistantInfo("m-assistant-meta", "m-user-meta"),
+    const parsed = MessageV2.Info.zod.parse({
+      ...assistantInfo(MessageID.ascending("msg_assistant_meta"), MessageID.ascending("msg_user_meta")),
       metadata: {
         context_bonsai: {
           restored: {
