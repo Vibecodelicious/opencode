@@ -451,6 +451,11 @@ export interface Interface {
   readonly children: (parentID: SessionID) => Effect.Effect<Info[]>
   readonly remove: (sessionID: SessionID) => Effect.Effect<void, NotFound>
   readonly updateMessage: <T extends MessageV2.Info>(msg: T) => Effect.Effect<T>
+  readonly updateMessageAtomic: (input: {
+    sessionID: SessionID
+    messageID: MessageID
+    mutate: (draft: MessageV2.Info) => void
+  }) => Effect.Effect<MessageV2.Info, unknown>
   readonly removeMessage: (input: { sessionID: SessionID; messageID: MessageID }) => Effect.Effect<MessageID>
   readonly removePart: (input: { sessionID: SessionID; messageID: MessageID; partID: PartID }) => Effect.Effect<PartID>
   readonly getPart: (input: {
@@ -584,6 +589,26 @@ export const layer: Layer.Layer<Service, never, Bus.Service | Storage.Service | 
         yield* sync.run(MessageV2.Event.Updated, { sessionID: msg.sessionID, info: msg })
         return msg
       }).pipe(Effect.withSpan("Session.updateMessage"))
+
+    const updateMessageAtomic: Interface["updateMessageAtomic"] = Effect.fn("Session.updateMessageAtomic")(function* (
+      input,
+    ) {
+      const current = MessageV2.get({ sessionID: input.sessionID, messageID: input.messageID }).info
+      const draft = structuredClone(current) as MessageV2.Info
+      const id = draft.id
+      const sessionID = draft.sessionID
+      const role = draft.role
+
+      input.mutate(draft)
+
+      if (draft.id !== id) throw new Error("Cannot change identity field: id")
+      if (draft.sessionID !== sessionID) throw new Error("Cannot change identity field: sessionID")
+      if (draft.role !== role) throw new Error("Cannot change identity field: role")
+
+      const parsed = (yield* Schema.decodeUnknownEffect(MessageV2.Info)(draft)) as MessageV2.Info
+      yield* updateMessage(parsed)
+      return parsed
+    })
 
     const updatePart = <T extends MessageV2.Part>(part: T): Effect.Effect<T> =>
       Effect.gen(function* () {
@@ -797,6 +822,7 @@ export const layer: Layer.Layer<Service, never, Bus.Service | Storage.Service | 
       children,
       remove,
       updateMessage,
+      updateMessageAtomic,
       removeMessage,
       removePart,
       updatePart,

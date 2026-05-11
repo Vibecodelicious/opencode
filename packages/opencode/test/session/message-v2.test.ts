@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { APICallError } from "ai"
+import { Schema } from "effect"
 import { MessageV2 } from "../../src/session/message-v2"
 import { ProviderTransform } from "@/provider/transform"
 import type { Provider } from "@/provider/provider"
@@ -107,6 +108,17 @@ function basePart(messageID: string, id: string) {
     messageID: MessageID.make(messageID.startsWith("msg") ? messageID : `msg_${messageID}`),
   }
 }
+
+describe("session.message-v2 schema", () => {
+  test("preserves optional message metadata", () => {
+    const parsed = Schema.decodeUnknownSync(MessageV2.Info)({
+      ...userInfo("msg_metadata"),
+      metadata: { bonsai: "retained" },
+    })
+
+    expect(parsed.metadata).toEqual({ bonsai: "retained" })
+  })
+})
 
 describe("session.message-v2.toModelMessage", () => {
   test("filters out messages with no parts", async () => {

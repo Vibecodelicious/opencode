@@ -51,6 +51,9 @@ import { Git } from "@/git"
 import { Skill } from "../skill"
 import { Permission } from "@/permission"
 import { Reference } from "@/reference/reference"
+import { MessageID } from "@/session/schema"
+import type { MessageV2 } from "@/session/message-v2"
+import { Instance } from "@/project/instance"
 
 const log = Log.create({ service: "tool.registry" })
 
@@ -110,6 +113,7 @@ export const layer: Layer.Layer<
     const agents = yield* Agent.Service
     const skill = yield* Skill.Service
     const truncate = yield* Truncate.Service
+    const session = yield* Session.Service
 
     const invalid = yield* InvalidTool
     const task = yield* TaskTool
@@ -151,11 +155,25 @@ export const layer: Layer.Layer<
             description: def.description,
             execute: (args, toolCtx) =>
               Effect.gen(function* () {
+                const instance = yield* InstanceState.context
                 const pluginCtx: PluginToolContext = {
                   ...toolCtx,
                   ask: (req) => toolCtx.ask(req),
                   directory: ctx.directory,
                   worktree: ctx.worktree,
+                  messages: toolCtx.messages as unknown as PluginToolContext["messages"],
+                  updateMessage: (id, mutate) =>
+                    Instance.restore(instance, () =>
+                      Effect.runPromise(
+                        session
+                          .updateMessageAtomic({
+                            sessionID: toolCtx.sessionID,
+                            messageID: Schema.decodeUnknownSync(MessageID)(id),
+                            mutate: mutate as unknown as (draft: MessageV2.Info) => void,
+                          })
+                          .pipe(Effect.asVoid),
+                      ),
+                    ),
                 }
                 const result = yield* Effect.promise(() => def.execute(args as any, pluginCtx))
                 const output = typeof result === "string" ? result : result.output

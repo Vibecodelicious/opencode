@@ -29,6 +29,14 @@ function updateMessage<T extends MessageV2.Info>(msg: T) {
   return AppRuntime.runPromise(SessionNs.Service.use((svc) => svc.updateMessage(msg)))
 }
 
+function updateMessageAtomic(input: {
+  sessionID: SessionID
+  messageID: MessageID
+  mutate: (draft: MessageV2.Info) => void
+}) {
+  return AppRuntime.runPromise(SessionNs.Service.use((svc) => svc.updateMessageAtomic(input)))
+}
+
 function updatePart<T extends MessageV2.Part>(part: T) {
   return AppRuntime.runPromise(SessionNs.Service.use((svc) => svc.updatePart(part)))
 }
@@ -164,6 +172,73 @@ describe("step-finish token propagation via Bus event", () => {
 })
 
 describe("Session", () => {
+  test("updateMessageAtomic persists metadata", async () => {
+    await WithInstance.provide({
+      directory: projectRoot,
+      fn: async () => {
+        const info = await create({})
+        const messageID = MessageID.ascending()
+
+        await updateMessage({
+          id: messageID,
+          sessionID: info.id,
+          role: "user",
+          time: { created: Date.now() },
+          agent: "user",
+          model: { providerID: "test", modelID: "test" },
+          tools: {},
+          mode: "",
+        } as unknown as MessageV2.Info)
+
+        await updateMessageAtomic({
+          sessionID: info.id,
+          messageID,
+          mutate: (draft) => {
+            draft.metadata = { bonsai: "archived" }
+          },
+        })
+
+        const messages = await AppRuntime.runPromise(SessionNs.Service.use((svc) => svc.messages({ sessionID: info.id })))
+        expect(messages.find((msg) => msg.info.id === messageID)?.info.metadata).toEqual({ bonsai: "archived" })
+
+        await remove(info.id)
+      },
+    })
+  })
+
+  test("updateMessageAtomic rejects identity changes", async () => {
+    await WithInstance.provide({
+      directory: projectRoot,
+      fn: async () => {
+        const info = await create({})
+        const messageID = MessageID.ascending()
+
+        await updateMessage({
+          id: messageID,
+          sessionID: info.id,
+          role: "user",
+          time: { created: Date.now() },
+          agent: "user",
+          model: { providerID: "test", modelID: "test" },
+          tools: {},
+          mode: "",
+        } as unknown as MessageV2.Info)
+
+        await expect(
+          updateMessageAtomic({
+            sessionID: info.id,
+            messageID,
+            mutate: (draft) => {
+              draft.id = MessageID.ascending()
+            },
+          }),
+        ).rejects.toThrow("Cannot change identity field: id")
+
+        await remove(info.id)
+      },
+    })
+  })
+
   test("remove works without an instance", async () => {
     await using tmp = await tmpdir({ git: true })
 

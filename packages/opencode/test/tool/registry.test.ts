@@ -26,6 +26,9 @@ import { Ripgrep } from "@/file/ripgrep"
 import * as Truncate from "@/tool/truncate"
 import { InstanceState } from "@/effect/instance-state"
 import { Reference } from "@/reference/reference"
+import * as Tool from "@/tool/tool"
+import { MessageV2 } from "@/session/message-v2"
+import { MessageID, PartID } from "@/session/schema"
 
 const node = CrossSpawnSpawner.defaultLayer
 const originalExperimentalScout = Flag.OPENCODE_EXPERIMENTAL_SCOUT
@@ -55,7 +58,7 @@ const registryLayer = ToolRegistry.layer.pipe(
   Layer.provide(Truncate.defaultLayer),
 )
 
-const it = testEffect(Layer.mergeAll(registryLayer, node))
+const it = testEffect(Layer.mergeAll(registryLayer, node, Session.defaultLayer))
 
 afterEach(async () => {
   Flag.OPENCODE_EXPERIMENTAL_SCOUT = originalExperimentalScout
@@ -214,6 +217,77 @@ describe("tool.registry", () => {
       const registry = yield* ToolRegistry.Service
       const ids = yield* registry.ids()
       expect(ids).toContain("cowsay")
+    }),
+  )
+
+  it.instance("passes messages and updateMessage to plugin tools", () =>
+    Effect.gen(function* () {
+      const test = yield* TestInstance
+      const opencode = path.join(test.directory, ".opencode")
+      const toolDir = path.join(opencode, "tool")
+      yield* Effect.promise(() => fs.mkdir(toolDir, { recursive: true }))
+      yield* Effect.promise(() =>
+        Bun.write(
+          path.join(toolDir, "bonsai.ts"),
+          [
+            "export default {",
+            "  description: 'bonsai tool',",
+            "  args: {},",
+            "  execute: async (_args, ctx) => {",
+            "    const seen = ctx.messages.find((msg) => msg.info.id === ctx.messageID)",
+            "    if (!seen) throw new Error('missing message context')",
+            "    await ctx.updateMessage(ctx.messageID, (draft) => {",
+            "      draft.metadata = { ...(draft.metadata ?? {}), plugin: 'updated' }",
+            "    })",
+            "    return JSON.stringify({ messageID: seen.info.id, text: seen.parts[0]?.text })",
+            "  },",
+            "}",
+            "",
+          ].join("\n"),
+        ),
+      )
+
+      const session = yield* Session.Service
+      const chat = yield* session.create({})
+      const messageID = MessageID.ascending()
+      const message = yield* session.updateMessage({
+        id: messageID,
+        sessionID: chat.id,
+        role: "user",
+        time: { created: Date.now() },
+        agent: "user",
+        model: { providerID: "test", modelID: "test" },
+        tools: {},
+        mode: "",
+      } as unknown as MessageV2.Info)
+      yield* session.updatePart({
+        id: PartID.ascending(),
+        sessionID: chat.id,
+        messageID,
+        type: "text",
+        text: "hello bonsai",
+      })
+
+      const registry = yield* ToolRegistry.Service
+      const tools = yield* registry.all()
+      const bonsai = tools.find((item) => item.id === "bonsai")
+      expect(bonsai).toBeDefined()
+
+      const messages = yield* session.messages({ sessionID: chat.id })
+      const ctx: Tool.Context = {
+        sessionID: chat.id,
+        messageID: message.id,
+        agent: "build",
+        abort: new AbortController().signal,
+        messages,
+        metadata: () => Effect.void,
+        ask: () => Effect.void,
+      }
+      const result = yield* bonsai!.execute({}, ctx)
+
+      expect(JSON.parse(result.output)).toEqual({ messageID, text: "hello bonsai" })
+      const updated = yield* session.messages({ sessionID: chat.id })
+      expect(updated.find((msg) => msg.info.id === messageID)?.info.metadata).toEqual({ plugin: "updated" })
     }),
   )
 })
