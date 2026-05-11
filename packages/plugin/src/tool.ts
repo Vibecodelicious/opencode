@@ -1,5 +1,6 @@
 import { z } from "zod"
 import { Effect } from "effect"
+import type { Message, Part } from "@opencode-ai/sdk"
 
 export type ToolContext = {
   sessionID: string
@@ -16,8 +17,10 @@ export type ToolContext = {
    */
   worktree: string
   abort: AbortSignal
+  messages: Array<{ info: Message; parts: Part[] }>
   metadata(input: { title?: string; metadata?: { [key: string]: any } }): void
   ask(input: AskInput): Effect.Effect<void>
+  updateMessage(id: string, fn: (draft: Message) => void): Promise<void>
 }
 
 type AskInput = {

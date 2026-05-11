@@ -373,6 +373,7 @@ export type ToolPart = Omit<Types.DeepMutable<Schema.Schema.Type<typeof ToolPart
 const messageBase = {
   id: MessageID,
   sessionID: SessionID,
+  metadata: Schema.optional(Schema.Record(Schema.String, Schema.Any)),
 }
 
 export const User = Schema.Struct({

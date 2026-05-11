@@ -51,6 +51,8 @@ import { Git } from "@/git"
 import { Skill } from "../skill"
 import { Permission } from "@/permission"
 import { Reference } from "@/reference/reference"
+import type { MessageV2 } from "@/session/message-v2"
+import type { Message, Part } from "@opencode-ai/sdk"
 
 const log = Log.create({ service: "tool.registry" })
 
@@ -110,6 +112,7 @@ export const layer: Layer.Layer<
     const agents = yield* Agent.Service
     const skill = yield* Skill.Service
     const truncate = yield* Truncate.Service
+    const sessions = yield* Session.Service
 
     const invalid = yield* InvalidTool
     const task = yield* TaskTool
@@ -156,6 +159,18 @@ export const layer: Layer.Layer<
                   ask: (req) => toolCtx.ask(req),
                   directory: ctx.directory,
                   worktree: ctx.worktree,
+                  messages: toolCtx.messages as Array<{ info: Message; parts: Part[] }>,
+                  updateMessage: (id, fn) =>
+                    Promise.resolve().then(() => {
+                      const current = toolCtx.messages.find((msg) => msg.info.id === id)
+                      if (!current) throw new Error(`Message not found: ${id}`)
+                      const draft = structuredClone(current.info)
+                      fn(draft as PluginToolContext["messages"][number]["info"])
+                      if (draft.id !== current.info.id) throw new Error("Cannot change message id")
+                      if (draft.sessionID !== current.info.sessionID) throw new Error("Cannot change message sessionID")
+                      if (draft.role !== current.info.role) throw new Error("Cannot change message role")
+                      return Effect.runPromise(sessions.updateMessage(draft as MessageV2.Info)).then(() => {})
+                    }),
                 }
                 const result = yield* Effect.promise(() => def.execute(args as any, pluginCtx))
                 const output = typeof result === "string" ? result : result.output
