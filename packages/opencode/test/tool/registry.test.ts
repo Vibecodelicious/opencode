@@ -6,7 +6,8 @@ import { Effect, Layer, Result, Schema } from "effect"
 import { CrossSpawnSpawner } from "@opencode-ai/core/cross-spawn-spawner"
 import { ToolRegistry } from "@/tool/registry"
 import { Tool } from "@/tool/tool"
-import { disposeAllInstances, TestInstance } from "../fixture/fixture"
+import type { MessageV2 } from "@/session/message-v2"
+import { disposeAllInstances, TestInstance, provideTmpdirInstance } from "../fixture/fixture"
 import { testEffect } from "../lib/effect"
 import { TestConfig } from "../fixture/config"
 import { AppFileSystem } from "@opencode-ai/core/filesystem"
@@ -567,5 +568,159 @@ describe("tool.registry", () => {
       const ids = yield* registry.ids()
       expect(ids).toContain("cowsay")
     }),
+  )
+
+  it.live("plugin tools receive messages and can update message metadata", () =>
+    provideTmpdirInstance((dir) =>
+      Effect.gen(function* () {
+        const opencode = path.join(dir, ".opencode")
+        const tool = path.join(opencode, "tool")
+        yield* Effect.promise(() => fs.mkdir(tool, { recursive: true }))
+        yield* Effect.promise(() =>
+          Bun.write(
+            path.join(tool, "bonsai.ts"),
+            [
+              "export default {",
+              "  description: 'updates current message metadata',",
+              "  args: {},",
+              "  execute: async (_args, context) => {",
+              "    await context.updateMessage(context.messageID, (draft) => {",
+              "      draft.id = 'mutated-id'",
+              "      draft.sessionID = 'mutated-session'",
+              "      draft.role = 'assistant'",
+              "      draft.metadata = {",
+              "        context_bonsai: {",
+              "          archived: {",
+              "            anchor_id: 'anchor-from-tool',",
+              "            seen_messages: context.messages.length,",
+              "          },",
+              "        },",
+              "      }",
+              "    })",
+              "    return JSON.stringify({ seen_messages: context.messages.length })",
+              "  },",
+              "}",
+              "",
+            ].join("\n"),
+          ),
+        )
+
+        const session = yield* Session.Service.use((svc) => svc.create({})).pipe(Effect.provide(Session.defaultLayer))
+        const msg = yield* Session.Service.use((svc) =>
+          svc.updateMessage({
+            id: MessageID.ascending(),
+            role: "user",
+            sessionID: session.id,
+            agent: "default",
+            model: {
+              providerID: ProviderID.make("test"),
+              modelID: ModelID.make("test"),
+            },
+            time: {
+              created: Date.now(),
+            },
+          }),
+        ).pipe(Effect.provide(Session.defaultLayer))
+
+        const registry = yield* ToolRegistry.Service
+        const agent = { name: "build", mode: "primary" as const, permission: [], options: {} }
+        const tools = yield* registry.tools({
+          providerID: ProviderID.make("test"),
+          modelID: ModelID.make("test"),
+          agent,
+        })
+        const bonsai = tools.find((item) => item.id === "bonsai")
+        if (!bonsai) throw new Error("bonsai tool not found")
+
+        const result = yield* bonsai.execute(
+          {},
+          {
+            sessionID: session.id,
+            messageID: msg.id,
+            agent: "build",
+            abort: new AbortController().signal,
+            messages: [
+              {
+                info: msg,
+                parts: [],
+              },
+            ] as MessageV2.WithParts[],
+            metadata: () => Effect.void,
+            ask: () => Effect.void,
+          },
+        )
+
+        expect(result.output).toContain('"seen_messages":1')
+
+        const updated = yield* Session.Service.use((svc) => svc.messages({ sessionID: session.id })).pipe(
+          Effect.provide(Session.defaultLayer),
+        )
+        expect(updated[0].info).toMatchObject({
+          id: msg.id,
+          sessionID: session.id,
+          role: "user",
+          metadata: {
+            context_bonsai: {
+              archived: {
+                anchor_id: "anchor-from-tool",
+                seen_messages: 1,
+              },
+            },
+          },
+        })
+      }),
+    ),
+  )
+
+  it.live("redacts archived message ids from context bonsai tool output", () =>
+    provideTmpdirInstance((dir) =>
+      Effect.gen(function* () {
+        const opencode = path.join(dir, ".opencode")
+        const tool = path.join(opencode, "tool")
+        yield* Effect.promise(() => fs.mkdir(tool, { recursive: true }))
+        yield* Effect.promise(() =>
+          Bun.write(
+            path.join(tool, "context-bonsai-prune.ts"),
+            [
+              "export default {",
+              "  description: 'returns archived ids',",
+              "  args: {},",
+              "  execute: async () => {",
+              '    return \'Archived 1 messages from pattern "foo" (resolved to msg_abc123) to pattern "bar" (resolved to msg_def456).\'',
+              "  },",
+              "}",
+              "",
+            ].join("\n"),
+          ),
+        )
+
+        const registry = yield* ToolRegistry.Service
+        const agent = { name: "build", mode: "primary" as const, permission: [], options: {} }
+        const tools = yield* registry.tools({
+          providerID: ProviderID.make("test"),
+          modelID: ModelID.make("test"),
+          agent,
+        })
+        const bonsai = tools.find((item) => item.id === "context-bonsai-prune")
+        if (!bonsai) throw new Error("context-bonsai-prune tool not found")
+
+        const result = yield* bonsai.execute(
+          {},
+          {
+            sessionID: SessionID.make("ses_test"),
+            messageID: MessageID.ascending("msg_redaction"),
+            agent: "build",
+            abort: new AbortController().signal,
+            messages: [],
+            metadata: () => Effect.void,
+            ask: () => Effect.void,
+          },
+        )
+
+        expect(result.output).toContain("[archived-message]")
+        expect(result.output).not.toContain("msg_abc123")
+        expect(result.output).not.toContain("msg_def456")
+      }),
+    ),
   )
 })

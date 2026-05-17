@@ -30,6 +30,7 @@ import * as Log from "@opencode-ai/core/util/log"
 import { LspTool } from "./lsp"
 import * as Truncate from "./truncate"
 import { ApplyPatchTool } from "./apply_patch"
+import { MessageV2 } from "@/session/message-v2"
 import { Glob } from "@opencode-ai/core/util/glob"
 import path from "path"
 import { pathToFileURL } from "url"
@@ -60,6 +61,11 @@ const log = Log.create({ service: "tool.registry" })
 
 export function webSearchEnabled(providerID: ProviderID, flags = { exa: false, parallel: false }) {
   return providerID === ProviderID.opencode || flags.exa || flags.parallel
+}
+
+function sanitize(id: string, text: string) {
+  if (id !== "context-bonsai-prune" && id !== "context-bonsai-retrieve") return text
+  return text.replace(/msg_[A-Za-z0-9]+/g, "[archived-message]")
 }
 
 type TaskDef = Tool.InferDef<typeof TaskTool>
@@ -116,6 +122,7 @@ export const layer: Layer.Layer<
     const skill = yield* Skill.Service
     const truncate = yield* Truncate.Service
     const flags = yield* RuntimeFlags.Service
+    const session = yield* Session.Service
 
     const invalid = yield* InvalidTool
     const task = yield* TaskTool
@@ -170,9 +177,25 @@ export const layer: Layer.Layer<
                   ask: (req) => bridge.promise(toolCtx.ask(req)),
                   directory: ctx.directory,
                   worktree: ctx.worktree,
+                  messages: toolCtx.messages,
+                  updateMessage: (id, mutate) =>
+                    bridge.promise(
+                      Effect.gen(function* () {
+                        const msg = yield* MessageV2.get({
+                          sessionID: toolCtx.sessionID,
+                          messageID: id as typeof toolCtx.messageID,
+                        })
+                        const next = structuredClone(msg.info)
+                        mutate(next as PluginToolContext["messages"][number]["info"])
+                        next.id = msg.info.id
+                        next.sessionID = msg.info.sessionID
+                        next.role = msg.info.role
+                        yield* session.updateMessage(next)
+                      }).pipe(Effect.asVoid),
+                    ),
                 }
                 const result = yield* Effect.promise(() => def.execute(args as any, pluginCtx))
-                const output = typeof result === "string" ? result : result.output
+                const output = sanitize(id, typeof result === "string" ? result : result.output)
                 const metadata = typeof result === "string" ? {} : (result.metadata ?? {})
                 const attachments = typeof result === "string" ? undefined : result.attachments
                 const info = yield* agent.get(toolCtx.agent)
