@@ -330,6 +330,7 @@ export const User = Schema.Struct({
   time: Schema.Struct({
     created: NonNegativeInt,
   }),
+  metadata: Schema.optional(Schema.Record(Schema.String, Schema.Any)),
   format: Schema.optional(Format),
   summary: Schema.optional(
     Schema.Struct({
@@ -456,6 +457,7 @@ export const Assistant = Schema.Struct({
     created: NonNegativeInt,
     completed: Schema.optional(NonNegativeInt),
   }),
+  metadata: Schema.optional(Schema.Record(Schema.String, Schema.Any)),
   error: Schema.optional(AssistantErrorSchema),
   parentID: MessageID,
   modelID: ModelID,
