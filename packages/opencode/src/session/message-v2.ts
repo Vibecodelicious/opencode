@@ -375,6 +375,7 @@ export const User = Schema.Struct({
   time: Schema.Struct({
     created: Schema.Number,
   }),
+  metadata: Schema.optional(Schema.Record(Schema.String, Schema.Any)),
   format: Schema.optional(_Format),
   summary: Schema.optional(
     Schema.Struct({
@@ -533,6 +534,7 @@ export const Assistant = Schema.Struct({
     created: Schema.Number,
     completed: Schema.optional(Schema.Number),
   }),
+  metadata: Schema.optional(Schema.Record(Schema.String, Schema.Any)),
   error: Schema.optional(Schema.Any.annotate({ [ZodOverride]: AssistantErrorZod })),
   parentID: MessageID,
   modelID: ModelID,
