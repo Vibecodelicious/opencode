@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import { SessionV1 } from "@opencode-ai/core/v1/session"
 import { APICallError } from "ai"
+import { Schema } from "effect"
 import { MessageV2 } from "../../src/session/message-v2"
 import { ProviderTransform } from "@/provider/transform"
 import type { Provider } from "@/provider/provider"
@@ -112,6 +113,52 @@ function basePart(messageID: string, id: string) {
 }
 
 describe("session.message-v2.toModelMessage", () => {
+  test("preserves metadata on parsed user messages", () => {
+    const parsed = Schema.decodeUnknownSync(SessionV1.Info)({
+      ...userInfo(MessageID.ascending("msg_user_meta")),
+      metadata: {
+        context_bonsai: {
+          archived: {
+            anchor_id: "anchor-user",
+          },
+        },
+      },
+    })
+
+    expect(parsed).toMatchObject({
+      metadata: {
+        context_bonsai: {
+          archived: {
+            anchor_id: "anchor-user",
+          },
+        },
+      },
+    })
+  })
+
+  test("preserves metadata on parsed assistant messages", () => {
+    const parsed = Schema.decodeUnknownSync(SessionV1.Info)({
+      ...assistantInfo(MessageID.ascending("msg_assistant_meta"), MessageID.ascending("msg_user_meta")),
+      metadata: {
+        context_bonsai: {
+          restored: {
+            anchor_id: "anchor-assistant",
+          },
+        },
+      },
+    })
+
+    expect(parsed).toMatchObject({
+      metadata: {
+        context_bonsai: {
+          restored: {
+            anchor_id: "anchor-assistant",
+          },
+        },
+      },
+    })
+  })
+
   test("filters out messages with no parts", async () => {
     const input: SessionV1.WithParts[] = [
       {
