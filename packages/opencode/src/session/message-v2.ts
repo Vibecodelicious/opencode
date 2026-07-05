@@ -19,6 +19,7 @@ import {
 import { NamedError } from "@opencode-ai/core/util/error"
 import { APICallError, convertToModelMessages, LoadAPIKeyError, type ModelMessage, type UIMessage } from "ai"
 import { Database } from "@opencode-ai/core/database/database"
+import { EventV2Bridge } from "@/event-v2-bridge"
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import { NotFoundError } from "@/storage/storage"
 import { and } from "drizzle-orm"
@@ -518,6 +519,26 @@ export const get = Effect.fn("MessageV2.get")(function* (input: { sessionID: Ses
   }
 })
 
+// Context Bonsai persists anchor/restore metadata onto an existing message so
+// later turns can scan for it. Verify the message exists, rewrite its stored
+// row synchronously (the same `data` shape the projector writes — id/sessionID
+// live in dedicated columns), then publish MessageUpdated so subscribers and
+// the durable projector converge on the same metadata-carrying payload.
+export const update = Effect.fn("MessageV2.update")(function* (info: Info) {
+  yield* get({ sessionID: info.sessionID, messageID: info.id })
+  const { db } = yield* Database.Service
+  const { id: _id, sessionID: _sessionID, ...data } = info
+  const events = yield* EventV2Bridge.Service
+  yield* db
+    .update(MessageTable)
+    .set({ data: data as typeof MessageTable.$inferInsert.data })
+    .where(eq(MessageTable.id, info.id))
+    .run()
+    .pipe(Effect.orDie)
+  yield* events.publish(SessionV1.Event.MessageUpdated, { sessionID: info.sessionID, info })
+  return info
+})
+
 export function filterCompacted(msgs: Iterable<WithParts>) {
   const result = [] as WithParts[]
   const completed = new Set<string>()
@@ -731,4 +752,4 @@ export function fromError(
 }
 
 export * as MessageV2 from "./message-v2"
-export const node = LayerNode.group([Database.node])
+export const node = LayerNode.group([Database.node, EventV2Bridge.node])
