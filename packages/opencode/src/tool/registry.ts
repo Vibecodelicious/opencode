@@ -3,6 +3,7 @@ import { httpClient } from "@opencode-ai/core/effect/app-node-platform"
 import { Ripgrep } from "@opencode-ai/core/ripgrep"
 import { PlanExitTool } from "./plan"
 import { Session } from "@/session/session"
+import { MessageV2 } from "@/session/message-v2"
 import { QuestionTool } from "./question"
 import { ShellTool } from "./shell"
 import { EditTool } from "./edit"
@@ -54,6 +55,14 @@ import { ModelV2 } from "@opencode-ai/core/model"
 
 export function webSearchEnabled(providerID: ProviderV2.ID, flags = { exa: false, parallel: false }) {
   return providerID === ProviderV2.ID.opencode || flags.exa || flags.parallel
+}
+
+// Context Bonsai prune/retrieve results reference archived message ids. Redact
+// them so a plain reveal request can't reuse a prune result to restore and leak
+// archived secret content. Only the context-bonsai tools are rewritten.
+function sanitize(id: string, text: string) {
+  if (id !== "context-bonsai-prune" && id !== "context-bonsai-retrieve") return text
+  return text.replace(/msg_[A-Za-z0-9]+/g, "[archived-message]")
 }
 
 type TaskDef = Tool.InferDef<typeof TaskTool>
@@ -138,9 +147,25 @@ const layer = Layer.effect(
                   ask: (req) => bridge.promise(toolCtx.ask(req)),
                   directory: ctx.directory,
                   worktree: ctx.worktree,
+                  messages: toolCtx.messages as unknown as PluginToolContext["messages"],
+                  updateMessage: (id, mutate) =>
+                    bridge.promise(
+                      Effect.gen(function* () {
+                        const msg = yield* MessageV2.get({
+                          sessionID: toolCtx.sessionID,
+                          messageID: id as typeof toolCtx.messageID,
+                        })
+                        const next = structuredClone(msg.info)
+                        mutate(next as PluginToolContext["messages"][number]["info"])
+                        next.id = msg.info.id
+                        next.sessionID = msg.info.sessionID
+                        next.role = msg.info.role as typeof next.role
+                        yield* MessageV2.update(next)
+                      }).pipe(Effect.asVoid),
+                    ),
                 }
                 const result = yield* Effect.promise(() => def.execute(args as any, pluginCtx))
-                const output = typeof result === "string" ? result : result.output
+                const output = sanitize(id, typeof result === "string" ? result : result.output)
                 const metadata = typeof result === "string" ? {} : (result.metadata ?? {})
                 const attachments = typeof result === "string" ? undefined : result.attachments
                 const info = yield* agent.get(toolCtx.agent)
