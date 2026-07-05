@@ -6,7 +6,13 @@ import { Effect, Layer, Result, Schema } from "effect"
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import { ToolRegistry } from "@/tool/registry"
 import { Tool } from "@/tool/tool"
-import { disposeAllInstances, TestInstance } from "../fixture/fixture"
+import { disposeAllInstances, TestInstance, provideTmpdirInstance } from "../fixture/fixture"
+import { Session } from "@/session/session"
+import { SessionV1 } from "@opencode-ai/core/v1/session"
+import { SessionProjector } from "@opencode-ai/core/session/projector"
+import { CrossSpawnSpawner } from "@opencode-ai/core/cross-spawn-spawner"
+import { Database } from "@opencode-ai/core/database/database"
+import { EventV2Bridge } from "@/event-v2-bridge"
 import { testEffect } from "../lib/effect"
 import { TestConfig } from "../fixture/config"
 import { Config } from "@/config/config"
@@ -94,6 +100,22 @@ const withEmptyCodeMode = testEffect(
   ]),
 )
 const withBrokenPlugin = testEffect(LayerNode.compile(root, [...replacements, [Plugin.node, brokenPluginLayer]]))
+// Context Bonsai message-metadata tests exercise the create -> publish ->
+// project -> store round-trip, so they need the SessionProjector wired in.
+const withProjector = testEffect(
+  LayerNode.compile(
+    LayerNode.group([
+      ToolRegistry.node,
+      Agent.node,
+      Session.node,
+      SessionProjector.node,
+      CrossSpawnSpawner.node,
+      Database.node,
+      EventV2Bridge.node,
+    ]),
+    replacements,
+  ),
+)
 
 afterEach(async () => {
   await disposeAllInstances()
@@ -568,5 +590,160 @@ describe("tool.registry", () => {
       const ids = yield* registry.ids()
       expect(ids).toContain("cowsay")
     }),
+  )
+
+  withProjector.live("plugin tools receive messages and can update message metadata", () =>
+    provideTmpdirInstance((dir) =>
+      Effect.gen(function* () {
+        const opencode = path.join(dir, ".opencode")
+        const tool = path.join(opencode, "tool")
+        yield* Effect.promise(() => fs.mkdir(tool, { recursive: true }))
+        yield* Effect.promise(() =>
+          Bun.write(
+            path.join(tool, "bonsai.ts"),
+            [
+              "export default {",
+              "  description: 'updates current message metadata',",
+              "  args: {},",
+              "  execute: async (_args, context) => {",
+              "    await context.updateMessage(context.messageID, (draft) => {",
+              "      draft.id = 'mutated-id'",
+              "      draft.sessionID = 'mutated-session'",
+              "      draft.role = 'assistant'",
+              "      draft.metadata = {",
+              "        context_bonsai: {",
+              "          archived: {",
+              "            anchor_id: 'anchor-from-tool',",
+              "            seen_messages: context.messages.length,",
+              "          },",
+              "        },",
+              "      }",
+              "    })",
+              "    return JSON.stringify({ seen_messages: context.messages.length })",
+              "  },",
+              "}",
+              "",
+            ].join("\n"),
+          ),
+        )
+
+        const sessions = yield* Session.Service
+        const session = yield* sessions.create({})
+        const msg = yield* sessions.updateMessage({
+          id: MessageID.ascending(),
+          role: "user",
+          sessionID: session.id,
+          agent: "default",
+          model: {
+            providerID: ProviderV2.ID.make("test"),
+            modelID: ModelV2.ID.make("test"),
+          },
+          time: {
+            created: Date.now(),
+          },
+        } as unknown as SessionV1.Info)
+
+        const registry = yield* ToolRegistry.Service
+        const agentSvc = yield* Agent.Service
+        const build = yield* agentSvc.get("build")
+        if (!build) throw new Error("build agent not found")
+        const tools = yield* registry.tools({
+          providerID: ProviderV2.ID.make("test"),
+          modelID: ModelV2.ID.make("test"),
+          agent: build,
+        })
+        const bonsai = tools.find((item) => item.id === "bonsai")
+        if (!bonsai) throw new Error("bonsai tool not found")
+
+        const result = yield* bonsai.execute(
+          {},
+          {
+            sessionID: session.id,
+            messageID: msg.id,
+            agent: "build",
+            abort: new AbortController().signal,
+            messages: [
+              {
+                info: msg,
+                parts: [],
+              },
+            ] as SessionV1.WithParts[],
+            metadata: () => Effect.void,
+            ask: () => Effect.void,
+          },
+        )
+
+        expect(result.output).toContain('"seen_messages":1')
+
+        const updated = yield* sessions.messages({ sessionID: session.id })
+        expect(updated[0].info).toMatchObject({
+          id: msg.id,
+          sessionID: session.id,
+          role: "user",
+          metadata: {
+            context_bonsai: {
+              archived: {
+                anchor_id: "anchor-from-tool",
+                seen_messages: 1,
+              },
+            },
+          },
+        })
+      }),
+    ),
+  )
+
+  withProjector.live("redacts archived message ids from context bonsai tool output", () =>
+    provideTmpdirInstance((dir) =>
+      Effect.gen(function* () {
+        const opencode = path.join(dir, ".opencode")
+        const tool = path.join(opencode, "tool")
+        yield* Effect.promise(() => fs.mkdir(tool, { recursive: true }))
+        yield* Effect.promise(() =>
+          Bun.write(
+            path.join(tool, "context-bonsai-prune.ts"),
+            [
+              "export default {",
+              "  description: 'returns archived ids',",
+              "  args: {},",
+              "  execute: async () => {",
+              '    return \'Archived 1 messages from pattern "foo" (resolved to msg_abc123) to pattern "bar" (resolved to msg_def456).\'',
+              "  },",
+              "}",
+              "",
+            ].join("\n"),
+          ),
+        )
+
+        const registry = yield* ToolRegistry.Service
+        const agentSvc = yield* Agent.Service
+        const build = yield* agentSvc.get("build")
+        if (!build) throw new Error("build agent not found")
+        const tools = yield* registry.tools({
+          providerID: ProviderV2.ID.make("test"),
+          modelID: ModelV2.ID.make("test"),
+          agent: build,
+        })
+        const bonsai = tools.find((item) => item.id === "context-bonsai-prune")
+        if (!bonsai) throw new Error("context-bonsai-prune tool not found")
+
+        const result = yield* bonsai.execute(
+          {},
+          {
+            sessionID: SessionID.make("ses_test"),
+            messageID: MessageID.ascending("msg_redaction"),
+            agent: "build",
+            abort: new AbortController().signal,
+            messages: [],
+            metadata: () => Effect.void,
+            ask: () => Effect.void,
+          },
+        )
+
+        expect(result.output).toContain("[archived-message]")
+        expect(result.output).not.toContain("msg_abc123")
+        expect(result.output).not.toContain("msg_def456")
+      }),
+    ),
   )
 })
